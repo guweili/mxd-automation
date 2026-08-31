@@ -50,4 +50,4 @@ skills:
   cooldown: 300.0
 pickup_enabled: true
 pickup_key: z
-pickup_interval: 0.333
+pickup_interval: 0.2

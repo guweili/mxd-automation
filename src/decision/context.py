@@ -53,6 +53,7 @@ Context 字段说明
   detections:     全部 YOLO 检测结果（含所有类别）
 """
 import random
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Callable
 
@@ -114,22 +115,23 @@ STUCK_FRAMES = 60
 EXPLORE_DIRECTION_SWITCH_FRAMES = 180
 """探索方向切换帧数：探索状态下持续此帧数没遇到怪就换方向"""
 
-LOST_DIRECTION_SWITCH_MIN = 30
-LOST_DIRECTION_SWITCH_MAX = 150
-"""迷失恢复方向切换帧数随机范围（约 1.5~7.5 秒 @20fps）。
+LOST_DIRECTION_SWITCH_MIN = 1.0
+LOST_DIRECTION_SWITCH_MAX = 5.0
+"""迷失恢复方向切换时长的随机范围（秒）。
 
-自身定位失败（迷失）时，探索状态走"左右来回走 + 随机跳"的恢复策略。
-每次换方向都随机抽一个持续时长：既避免角色无脑往一个方向跑出屏幕，
-也让移动节奏随机化（不像固定间隔那样容易被判定为脚本）。
+自身定位失败（迷失）时，探索状态走"随机左右走 + 随机跳"的恢复策略。
+每次换方向都随机抽一个持续秒数（1~5 秒），且方向随机抽 left/right，
+避免角色无脑往一个方向一路跑出屏幕。按秒计时（用 time.time() 时间戳），
+与帧率无关，行为稳定可预期。
 """
 
-LOST_JUMP_INTERVAL_MIN = 20
-LOST_JUMP_INTERVAL_MAX = 70
-"""迷失恢复跳跃间隔帧数随机范围（约 1~3.5 秒 @20fps）。
+LOST_JUMP_INTERVAL_MIN = 1.0
+LOST_JUMP_INTERVAL_MAX = 3.5
+"""迷失恢复跳跃间隔的随机范围（秒）。
 
 未定位时按随机间隔按跳跃键：角色名字在脚下，被地图/UI 遮挡时
 OCR 看不到，跳起来能让名字/身体从遮挡层露出来，便于重新定位。
-间隔随机化避免固定节奏；press_key 自带 cooldown 兜底限频。
+按秒计时；press_key 自带 cooldown 兜底限频。
 """
 
 DISTANCE_LOG_FRAMES = 60
@@ -292,12 +294,13 @@ class DecisionEngine:
         self._occluded_frames = 0                 # 目标被角色遮挡的连续帧数（虚拟目标维持）
         self._self_pos_stale_frames = 0           # 自身定位连续失败的帧数（最后已知位置时效）
 
-        # 迷失恢复（未定位时左右来回走 + 随机跳）
-        self._lost_frame_count = 0                # 当前迷失会话累计帧数
-        self._lost_switch_frames = random.randint(  # 下一次换方向的随机帧数
+        # 迷失恢复（未定位时随机左右走 + 随机跳，按秒计时）
+        self._lost_direction_start = 0.0           # 当前方向开始的时间戳（秒）
+        self._lost_switch_seconds = random.uniform(  # 下一次换方向的随机秒数
             LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
         )
-        self._lost_jump_frames = random.randint(  # 下一次跳跃的随机帧数
+        self._lost_last_jump_time = 0.0            # 上次跳跃的时间戳（秒）
+        self._lost_jump_seconds = random.uniform(  # 下一次跳跃的随机间隔秒数
             LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
         )
 
@@ -315,11 +318,12 @@ class DecisionEngine:
         self._attack_stale_counter = 0
         self._face_dir = None
         self._melee_leave_frames = 0
-        self._lost_frame_count = 0
-        self._lost_switch_frames = random.randint(
+        self._lost_direction_start = 0.0
+        self._lost_switch_seconds = random.uniform(
             LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
         )
-        self._lost_jump_frames = random.randint(
+        self._lost_last_jump_time = 0.0
+        self._lost_jump_seconds = random.uniform(
             LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
         )
         self._occluded_frames = 0
@@ -402,6 +406,16 @@ class DecisionEngine:
             self._fsm.transition(State.IDLE)
             self._target_monster = None
             self._attack_stale_counter = 0
+            # 进入迷失恢复前随机抽初始方向 + 初始化计时，避免固定往右走
+            self._explore_direction = random.choice(["left", "right"])
+            self._lost_direction_start = time.time()
+            self._lost_switch_seconds = random.uniform(
+                LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
+            )
+            self._lost_last_jump_time = time.time()
+            self._lost_jump_seconds = random.uniform(
+                LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
+            )
             self._explore(ctx)
             return
 
@@ -1534,36 +1548,37 @@ class DecisionEngine:
         """
         self._explore_frame_count += 1
 
-        # ---- 迷失恢复：自身定位失败，左右来回走 + 随机跳跃 ----
+        # ---- 迷失恢复：自身定位失败，随机左右走 + 随机跳跃（按秒计时）----
         if ctx.self_position is None:
-            self._lost_frame_count += 1
-            # 卡住 → 反向 + 跳跃（少数情况下角色卡在地形里）
+            now = time.time()
+            # 卡住 → 随机方向 + 跳跃（少数情况下角色卡在地形里）
             if self._stuck_counter >= STUCK_FRAMES:
-                self._log("[探索] 未定位且卡住，跳跃并反向")
-                self._explore_direction = "left" if self._explore_direction == "right" else "right"
+                self._log("[探索] 未定位且卡住，跳跃并随机换方向")
+                self._explore_direction = random.choice(["left", "right"])
                 self.executor.press_key(self.config.jump_key, cooldown=1.0)
                 self._stuck_counter = 0
-                self._lost_frame_count = 0
-                return
-            # 随机间隔跳跃：让名字/身体从遮挡层露出来便于重新定位
-            if self._lost_frame_count >= self._lost_jump_frames:
-                self.executor.press_key(self.config.jump_key, cooldown=1.0)
-                self._lost_jump_frames = self._lost_frame_count + random.randint(
-                    LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
-                )
-            # 随机时长换方向：避免一路跑出屏幕，也不固定节奏
-            if self._lost_frame_count >= self._lost_switch_frames:
-                self._explore_direction = "left" if self._explore_direction == "right" else "right"
-                self._lost_frame_count = 0
-                self._lost_switch_frames = random.randint(
+                self._lost_direction_start = now
+                self._lost_switch_seconds = random.uniform(
                     LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
                 )
-                self._lost_jump_frames = random.randint(
+                return
+            # 随机间隔跳跃：让名字/身体从遮挡层露出来便于重新定位
+            if now - self._lost_last_jump_time >= self._lost_jump_seconds:
+                self.executor.press_key(self.config.jump_key, cooldown=1.0)
+                self._lost_last_jump_time = now
+                self._lost_jump_seconds = random.uniform(
                     LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
                 )
+            # 按秒随机换方向：当前方向持续够随机秒数后，随机抽新方向（各50%）
+            if now - self._lost_direction_start >= self._lost_switch_seconds:
+                self._explore_direction = random.choice(["left", "right"])
+                self._lost_direction_start = now
+                self._lost_switch_seconds = random.uniform(
+                    LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
+                )
                 self._log(
-                    f"[探索] 自身未定位，换方向 → {self._explore_direction} "
-                    f"(随机{self._lost_switch_frames}帧)"
+                    f"[探索] 自身未定位，随机方向 → {self._explore_direction} "
+                    f"(持续{self._lost_switch_seconds:.1f}秒)"
                 )
             self._hold_move(self._explore_direction)
             return
