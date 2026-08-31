@@ -162,15 +162,23 @@ class Automation:
             self.on_log("[模板] 角色外观模板加载成功")
         except FileNotFoundError:
             self._player = None
-            self.on_log(
-                "[模板] 未找到角色模板，外观跟踪不可用"
-                "（可在界面点\"上传角色全身照\"）"
-            )
+            # 兜底策略：没有模板时看是否有名字可定位
+            if self.config.self_name:
+                self.on_log(
+                    "[模板] 未找到角色模板，名称遮挡时将无法定位"
+                    "（可在界面点\"上传角色全身照\"补齐）"
+                )
+            else:
+                self.on_log(
+                    "[模板] 未找到角色模板，且未配置自身名字，"
+                    "自身定位不可用（请填写自身名字或点\"上传角色全身照\"）"
+                )
 
         # ---- 角色位置缓存 ----
         self._cached_center: Optional[Tuple[int, int]] = None   # 中心点（OCR 时才有）
         self._last_foot_pos: Optional[Tuple[int, int]] = None   # 脚底坐标（OCR/模板共用）
         self._locate_method: Optional[str] = None               # 当前定位方式: ocr / template
+        self._locate_failed_notified = False                    # 定位失败兜底提示是否已发出（限频用）
 
         # ---- HP/MP 变化追踪 ----
         self._last_hp_ratio: Optional[float] = None
@@ -582,6 +590,7 @@ class Automation:
             else:
                 self._cached_center = (center_x, center_y)
                 self._last_foot_pos = (foot_x, foot_y)
+                self._locate_failed_notified = False  # 定位成功，复位失败提示标记
                 if self._locate_method != "ocr":
                     self._locate_method = "ocr"
                     self.on_log(f"[定位] 名称识别成功, 切换为名称定位 ({foot_x},{foot_y})")
@@ -622,6 +631,7 @@ class Automation:
                     if not jumped:
                         self._cached_center = (int(x + bw / 2), int(y + bh / 2))
                         self._last_foot_pos = (foot_x, foot_y)
+                        self._locate_failed_notified = False  # 定位成功，复位失败提示标记
                         if self._locate_method != "template":
                             self._locate_method = "template"
                             self.on_log(
@@ -630,7 +640,20 @@ class Automation:
                             )
                         return (foot_x, foot_y)
 
-        # 两种方法都失败
+        # ---- 3. 兜底：两种方法都失败 ----
+        # 首次失败时给一次明确提示（避免每帧刷屏），之后静默返回 None。
+        if not self._locate_failed_notified:
+            self._locate_failed_notified = True
+            if self._player is None and not self.config.self_name:
+                self.on_log(
+                    "[定位] 无法定位自身：未配置名字且未上传模板，"
+                    "请填写自身名字或点\"上传角色全身照\""
+                )
+            else:
+                self.on_log(
+                    "[定位] 当前帧定位失败（名字被遮挡/模板未匹配），"
+                    "将尝试下一帧重新定位"
+                )
         return None
 
     def _get_last_center(self) -> Optional[Tuple[int, int]]:
