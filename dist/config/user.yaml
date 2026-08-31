@@ -4,13 +4,14 @@ reference_width: 1368
 reference_height: 800
 fps: 30
 keyboard_mode: sendinput
-confidence: 0.5
-model_path: best.onnx
+confidence: 0.49
+model_path: E:/pythonProjects/mxd-automation/train/scripts/02_train_yolo/model/best.pt
 monster_classes: monster
 floor_classes: floor
 rope_classes: rope
-self_name: 彤彤是我
+self_name: 我是立立
 self_offset: 85
+template_confidence: 0.55
 hp_region:
 - 0.3675
 - 0.974
@@ -37,9 +38,9 @@ mp_threshold: 0.5
 mp_key: pdn
 target_key: tab
 jump_key: c
-attack_type: short
-attack_range: 30
-attack_range_y: 60
+attack_type: long
+attack_range: 300
+attack_range_y: 55
 skills:
 - name: 技能1
   key: a
@@ -49,4 +50,4 @@ skills:
   cooldown: 300.0
 pickup_enabled: true
 pickup_key: z
-pickup_interval: 0.333
+pickup_interval: 0.2
