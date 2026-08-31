@@ -17,6 +17,8 @@
   │                  │       │                  │     │                  │
   │ OCRNameLocator   │──坐─▶│ self_position    │     │                  │
   │  (名字定位)       │       │  (自身坐标)      │     │                  │
+  │ PlayerTracker    │──框──▶│                  │     │                  │
+  │  (外观模板跟踪)   │       │                  │     │                  │
   └──────────────────┘       └──────────────────┘     └──────────────────┘
 
 ================================================================================
@@ -28,7 +30,9 @@
   3. detect_bar_ratio(hp_region)   → hp_ratio (0.0~1.0)
   4. detect_bar_ratio(mp_region)   → mp_ratio (0.0~1.0)
   5. OCRNameLocator.locate(frame)  → self_position (cx, cy) 或 None
+  5. PlayerTracker.locate(frame)     → self_position (box, conf) 或 None
   6. Context(monsters, floors, ..., hp_ratio, mp_ratio, self_position)
+     自身定位优先级: OCR 名字 → 外观模板
   7. DecisionEngine.decide(ctx)    → 反应式决策（同平台追击/爬绳/下落/探索/技能）
   8. on_frame(frame, ...)          → 预览回调（UI 渲染检测框）
 
@@ -36,14 +40,24 @@
 自身定位策略
 ================================================================================
 
-  RapidOCR 文字识别（唯一方案，每帧实时执行）
-    原理: OCR 识别画面中的角色名字（如"我是立立"）→ 名字中心 ≈ 脚底；
-          角色中心点 = 名字中心向上延伸"人物高度一半"（character_height//2，约 30px）
-          名字在脚下 → 角色身体在名字上方 → 中心点在名字上方（y 更小）
-    条件: 已配置 self_name；每帧执行，与 YOLO 检测同节奏，无缓存兜底
-    说明: 早期"HP 条偏移推算"用的是 UI 底部固定血条（hp_region），
-          不随角色移动，算出的坐标恒定不变（定位 bug），已移除。
-          搜索区域为画面 10%~100%，以兼顾角色跳跃/高处时的定位。
+  1. RapidOCR 文字识别（主方案，每帧实时执行）
+     原理: OCR 识别画面中的角色名字 → 名字中心 ≈ 脚底；
+           角色中心点 = 名字中心向上延伸"人物高度一半"（character_height//2，约 30px）
+     条件: 已配置 self_name；每帧执行，与 YOLO 检测同节奏。
+     优点: 精度最高。
+     缺点: 名字被地图/UI 面板挡住时失效。
+
+  2. PlayerTracker 外观模板跟踪（次方案，名字被遮挡时启用）
+     原理: 用户截取角色全身图作为模板 → cv2.matchTemplate 多尺度匹配 →
+           一旦锁定，下一帧只在附近局部搜索（加速）。
+     条件: 模板已上传（exe 界面"上传角色全身照"或 assets/templates/player_template.png）；
+           换时装/换地图需重新上传。
+     优点: 不依赖名字 OCR，角色下半身被地图挡住也能定位。
+     缺点: 依赖外观特征，时装/姿势变化大时可能匹配不上。
+
+  说明: 早期"HP 条偏移推算"用的是 UI 底部固定血条（hp_region），
+        不随角色移动，算出的坐标恒定不变（定位 bug），已移除。
+        阴影检测方案已废弃（冒险岛角色脚底无固定阴影，无法稳定定位）。
 
 ================================================================================
 运行方式
@@ -62,6 +76,7 @@ from .perception.screen_capture import ScreenCapture
 from .perception.yolo_detector import Detector, create_detector
 from .perception.hp_mp_detector import detect_bar_ratio
 from .perception.ocr_name_locator import OCRNameLocator
+from .perception.player_tracker import PlayerTracker
 from .execution.action_executor import ActionExecutor
 from .decision.context import Context, DecisionEngine
 from .utils.config_loader import Config, resolve_model_path
@@ -127,6 +142,7 @@ class Automation:
         self._running = False  # 控制循环是否继续
         self._thread = None    # 工作线程对象
         self._frame_count = 0  # 帧计数器（用于限频日志）
+        self._grab_fail_count = 0  # 连续截图失败计数（限频日志用）
 
         # ---- OCR 名字定位器（延迟初始化，首次使用时才加载模型）----
         # ocr_interval=1: 每帧都执行 OCR（和 YOLO 一样），位置实时更新
@@ -137,8 +153,23 @@ class Automation:
             on_log=self.on_log,
         )
 
-        # ---- 角色中心点缓存（由 OCR 定位时记录，供状态日志显示）----
-        self._cached_center: Optional[Tuple[int, int]] = None
+        # ---- 外观模板跟踪器（名字被地图/UI 遮挡时的次方案）----
+        try:
+            self._player = self._create_player_tracker(
+                "assets/templates/player_template.png"
+            )
+            self.on_log("[模板] 角色外观模板加载成功")
+        except FileNotFoundError:
+            self._player = None
+            self.on_log(
+                "[模板] 未找到角色模板 assets/templates/player_template.png，"
+                "外观跟踪不可用（可在界面点\"上传角色全身照\"）"
+            )
+
+        # ---- 角色位置缓存 ----
+        self._cached_center: Optional[Tuple[int, int]] = None   # 中心点（OCR 时才有）
+        self._last_foot_pos: Optional[Tuple[int, int]] = None   # 脚底坐标（OCR/模板共用）
+        self._locate_method: Optional[str] = None               # 当前定位方式: ocr / template
 
         # ---- HP/MP 变化追踪 ----
         self._last_hp_ratio: Optional[float] = None
@@ -194,6 +225,43 @@ class Automation:
         self.detector = detector
 
     # =========================================================================
+    # 角色外观模板管理
+    # =========================================================================
+
+    def _create_player_tracker(self, template_path: str) -> PlayerTracker:
+        """创建外观模板跟踪器（统一参数，避免多处重复）。"""
+        # 截图定位置信度从配置读取（config/user.yaml 的 template_confidence），
+        # 局部搜索和全图搜索共用同一个阈值，避免两套阈值导致全图搜索被
+        # 卡死。默认 0.55：真实角色因缩放/朝向/光照/部分遮挡，匹配分数
+        # 常在 0.55 上下，配合 exclude_bottom 排除底部 UI 头像，够用且
+        # 不易误匹配 UI。
+        conf = float(getattr(self.config, "template_confidence", 0.55))
+        return PlayerTracker(
+            template_path=template_path,
+            threshold=conf,
+            search_margin=200,
+            max_miss=8,
+            full_threshold=conf,
+        )
+
+    def set_player_template(self, path: str) -> None:
+        """运行时更换角色外观模板（UI 上传新截图时调用）。
+
+        换时装/换地图后，重新上传角色全身照即可立即生效，无需重启程序。
+
+        Args:
+            path: 模板图片的绝对路径（png/jpg/bmp）
+
+        Raises:
+            FileNotFoundError: 图片不存在或无法解码
+        """
+        if self._player is None:
+            self._player = self._create_player_tracker(path)
+        else:
+            self._player.set_template(path)
+        self.on_log(f"[模板] 角色外观模板已更新: {path}")
+
+    # =========================================================================
     # 主循环控制
     # =========================================================================
 
@@ -221,6 +289,8 @@ class Automation:
 
         self._running = True
         # daemon=True: 主线程退出时自动结束，不会卡住进程
+        self._last_foot_pos = None
+        self._cached_center = None
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         self.on_log("[启动] 自动打怪已开始")
@@ -235,6 +305,9 @@ class Automation:
             return
         self._running = False
         self.engine.release_keys()  # 释放按住的方向键/上键
+        if self._player is not None:
+            self._player.reset()     # 重置外观跟踪器
+        self._last_foot_pos = None   # 重置脚底位置缓存
         self.on_log("[停止] 自动打怪已停止")
 
     def _loop(self):
@@ -273,6 +346,7 @@ class Automation:
         t0 = time.time()  # 帧开始时间
         try:
             frame = self.capture.grab()
+            self._grab_fail_count = 0  # 截图成功，重置失败计数
             # 首次截图记录帧尺寸 + DPI 诊断
             if self._frame_count == 1:
                 h, w = frame.shape[:2]
@@ -297,7 +371,13 @@ class Automation:
                 except Exception:
                     pass
         except Exception as e:
-            self.on_log(f"[错误] 截图失败: {e}")
+            # 窗口刚锁定/最小化恢复的过渡期，grab 会短暂失败。限频日志：
+            # 只在首次失败、以及每连续 30 次失败时打印，避免刷屏几十条。
+            self._grab_fail_count += 1
+            if self._grab_fail_count == 1 or self._grab_fail_count % 30 == 0:
+                self.on_log(
+                    f"[错误] 截图失败(连续{self._grab_fail_count}次): {e}"
+                )
             time.sleep(interval)
             return
 
@@ -462,35 +542,94 @@ class Automation:
     def _locate_self(self, frame: np.ndarray) -> Optional[Tuple[int, int]]:
         """定位自身脚底在画面中的坐标。
 
-        策略:
-          RapidOCR 文字识别 - 每帧实时执行，识别到即返回（与 YOLO 同节奏）
+        策略（优先级）：
+          1. RapidOCR 名字定位 —— 主方案。角色名字显示在脚下，OCR 识别
+             名字中心即脚底，精度最高、最稳定。涂黑底部 UI 防 OCR 认到
+             左下角固定 UI 里的同名文字（等级面板里的"我是立立"）。
+          2. 外观模板跟踪（截图全身匹配）—— 辅助方案，名字被地图遮挡时
+             启用。角色站在地图底部时脚底 y 可达 640~660（地图底部边缘），
+             不能用"y > 0.82h"判定为误匹。
 
         说明:
-          早期版本优先用"HP 条偏移推算"（hp_region + self_offset），
-          但 hp_region 是 UI 底部固定的血条，不随角色移动，
-          算出的坐标恒定不变，导致定位失效（bug），已移除该方案。
-          不做缓存兜底：本帧未识别到名字即返回 None，
-          由决策层按"未定位"处理，避免使用过期位置。
+          角色在地图底部边缘站立时（名字刚好被地图底部挡住）只能靠截图
+          定位。底部 UI 没有"角色头像"等和模板撞脸的元素，所以截图匹
+          配不会受 UI 干扰——之前的"误匹到 UI 头像"是误判。
 
         Returns:
-            (cx, cy) 脚底坐标，None 表示本帧未识别到角色名字
+            (cx, cy) 脚底坐标，None 表示本帧所有方法都失败
         """
-        # 搜索区域：画面 10%~92%
-        # 底部 8% 是 UI 面板（HP/MP/角色名固定显示），排除掉，
-        # 否则 OCR 会匹配到 UI 里的角色名（固定位置永不变化），
-        # 导致定位锁死在 (385,760) 这种错误坐标
         h, w = frame.shape[:2]
-        search_region = (0, int(h * 0.10), w, int(h * 0.82))
 
-        result = self._ocr.locate(frame, self.config.self_name,
+        # ---- 1. OCR 名字定位（主方案）----
+        # 涂黑底部 UI 条（全宽度），避免 OCR 认到左下角固定 UI 里的同名
+        # 文字。search_region 也排除底部 18%，但同时允许结果落在更下方
+        # ——角色站在地图底部时脚底就在 640~660，OCR 找到名字也要采信。
+        search_region = (0, int(h * 0.10), w, int(h * 0.72))
+        ocr_frame = frame.copy()
+        mask_h = int(h * 0.18)
+        ocr_frame[h - mask_h:h, 0:w] = 0
+
+        result = self._ocr.locate(ocr_frame, self.config.self_name,
                                   search_region=search_region)
         if result is not None:
             center_x, center_y, foot_x, foot_y = result
-            # 记录中心点（用于日志）
-            self._cached_center = (center_x, center_y)
-            return (foot_x, foot_y)
+            # 仅做"明显不合理"的检查：脚底超出画面就丢弃
+            if foot_y < 0 or foot_y >= h or foot_x < 0 or foot_x >= w:
+                self.on_log(
+                    f"[定位] OCR 结果 ({foot_x},{foot_y}) 越界，丢弃"
+                )
+            else:
+                self._cached_center = (center_x, center_y)
+                self._last_foot_pos = (foot_x, foot_y)
+                if self._locate_method != "ocr":
+                    self._locate_method = "ocr"
+                    self.on_log(f"[定位] 名称识别成功, 切换为名称定位 ({foot_x},{foot_y})")
+                # OCR 命中时回填模板位置，让截图下一帧能续上
+                if self._player is not None:
+                    bw, bh = self._player.tw, self._player.th
+                    px = max(0, foot_x - bw // 2)
+                    py = max(0, int(foot_y - bh * 0.9))
+                    self._player.last_box = (px, py, bw, bh)
+                    self._player.miss_count = 0
+                return (foot_x, foot_y)
 
-        # 本帧未识别到 → 不返回缓存，直接视为未定位
+        # ---- 2. 外观模板跟踪（辅助方案：名字被地图遮挡时）----
+        # 角色可以合法地站在地图底部边缘（脚底 y 可达 640~660），
+        # 不要用 y 阈值或底部排除把这种合法位置过滤掉。
+        if self._player is not None:
+            box = self._player.locate(frame)
+            if box is not None:
+                x, y, bw, bh, conf = box
+                foot_x = int(x + bw / 2)
+                foot_y = int(y + bh)
+                # 仅检查"明显不合理"：匹配框出界 或 框太大（>200，疑似整张图）
+                if foot_y < 0 or foot_y >= h or foot_x < 0 or foot_x >= w:
+                    self._player.reset()
+                elif bh > 200:
+                    self.on_log(
+                        f"[定位] 模板结果 bh={bh} 过大（疑似整张图），丢弃"
+                    )
+                    self._player.reset()
+                else:
+                    # 跳变校验：与上次有效位置偏移过大 → 模板误匹配
+                    jumped = False
+                    if self._last_foot_pos is not None:
+                        lfx, lfy = self._last_foot_pos
+                        if abs(foot_x - lfx) > 250 or abs(foot_y - lfy) > 150:
+                            self._player.reset()
+                            jumped = True
+                    if not jumped:
+                        self._cached_center = (int(x + bw / 2), int(y + bh / 2))
+                        self._last_foot_pos = (foot_x, foot_y)
+                        if self._locate_method != "template":
+                            self._locate_method = "template"
+                            self.on_log(
+                                f"[定位] 名称被遮挡, 切换为截图定位 "
+                                f"({foot_x},{foot_y}) 置信度 {conf:.2f}"
+                            )
+                        return (foot_x, foot_y)
+
+        # 两种方法都失败
         return None
 
     def _get_last_center(self) -> Optional[Tuple[int, int]]:

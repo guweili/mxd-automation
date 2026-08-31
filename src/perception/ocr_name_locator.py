@@ -86,7 +86,9 @@ class OCRNameLocator:
         # 误识别，沿用上次位置且不更新缓存。角色正常移动每帧最多几十
         # px，超过上限只能是误识别（游戏无瞬移）；换图后 OCR 找不到
         # 名字会返回 None，由决策层按未定位处理，不会用错误位置。
-        self._max_jump = 200  # 单次识别相对上次有效位置的偏移上限(px)
+        # 这里用的是曼哈顿距离(|dx|+|dy|)，所以 300 ≈ 角色在 200×100
+        # 范围内都算合理（移动+小跳）。
+        self._max_jump = 300  # 单次识别相对上次有效位置的偏移上限(px，曼哈顿)
 
         # 连续误识别超时重置：如果首帧就识别到了错误位置（比如匹配到
         # UI 固定文字），后续所有帧都会被 _max_jump 过滤掉，位置永远
@@ -106,19 +108,26 @@ class OCRNameLocator:
         # 小图识别快（几十 ms）→ 定位可每帧高频更新，角色移动时
         # 坐标变动更及时；且窗口外区域（聊天框/UI 同名文本）天然
         # 被排除，误识别更少。窗口内找不到再回退全屏搜索区域。
-        self._window_w = 640
-        self._window_h = 400
+        self._window_w = 1100
+        self._window_h = 600
 
     # ---- 公开接口 ----
 
     def locate(self, frame: np.ndarray, name: str,
                min_confidence: float = 0.5,
-               search_region: Optional[Tuple[int, int, int, int]] = None
+               search_region: Optional[Tuple[int, int, int, int]] = None,
+               exclude_region: Optional[Tuple[int, int, int, int]] = None
                ) -> Optional[Tuple[int, int, int, int]]:
         """在画面中查找指定名字，返回 (中心点x, 中心点y, 脚底x, 脚底y)。
 
-        和 YOLO 一样，每帧都执行 OCR，不做缓存、不做跳变过滤、
-        不做"离上次最近"策略。直接取置信度最高的匹配结果。
+        每帧都执行 OCR，但结果经过两层过滤，避免定位锁死到 UI 固定文字：
+          1. exclude_region: 识别候选中心落在该区域(如左下角 UI 面板)
+             内 → 直接丢弃。UI 面板上的固定同名文字（"我是立立"）永远
+             不会与角色头顶/脚下的真实名字竞争。
+          2. 跳变过滤(_max_jump): 与上次有效位置偏移过大(>200px)的候选
+             视为误识别丢弃。角色每帧正常移动只有几十 px，不会瞬移；
+             连续多帧(_skip_threshold)都无有效候选 → 判定缓存已失效
+             （换图/瞬移/首帧选错），清空缓存下一帧全图重新锁定。
 
         冒险岛角色名字在脚下，所以:
           - 脚底 ≈ 名字中心 y（名字就在脚底位置）
@@ -129,6 +138,8 @@ class OCRNameLocator:
             name:          要查找的角色名字（如 "我是立立"）
             min_confidence: 最低置信度阈值
             search_region:  可选搜索区域 (x, y, w, h)，裁剪后 OCR 更快
+            exclude_region: 可选排除区域 (x, y, w, h)。候选中心落在该区域
+                            内即丢弃（用于排除 UI 面板固定同名文字）
 
         Returns:
             (center_x, center_y, foot_x, foot_y) 或 None
@@ -155,12 +166,12 @@ class OCRNameLocator:
             x1 = max(0, min(w - win_w, cx - win_w // 2))
             y1 = max(0, min(h - win_h, cy - win_h // 2))
             roi = frame[y1:y1 + win_h, x1:x1 + win_w]
-            found = self._match_in_roi(engine, roi, name, min_confidence, x1, y1)
-            if found is not None:
-                center, foot = found
-                self._last_center = center
-                self._last_foot = foot
-                return (*center, *foot)
+            candidates = self._match_in_roi(
+                engine, roi, name, min_confidence, x1, y1, exclude_region)
+            if candidates:
+                chosen = self._select_candidate(candidates)
+                if chosen is not None:
+                    return self._commit(chosen)
 
         # ---- 2. 回退：全屏搜索区域 ----
         roi = frame
@@ -176,17 +187,69 @@ class OCRNameLocator:
             roi = frame[y1:y2, x1:x2]
             offset_x, offset_y = x1, y1
 
-        found = self._match_in_roi(engine, roi, name, min_confidence, offset_x, offset_y)
-        if found is None:
-            return None
-        center, foot = found
+        candidates = self._match_in_roi(
+            engine, roi, name, min_confidence, offset_x, offset_y, exclude_region)
+        if candidates:
+            chosen = self._select_candidate(candidates)
+            if chosen is not None:
+                return self._commit(chosen)
+
+        # 本帧所有候选都被过滤（UI 误识别/跳变异常/名字被遮挡）
+        self._skip_counter += 1
+        if self._skip_counter >= self._skip_threshold:
+            # 连续多帧无有效候选 → 上次位置很可能已失效（换图/瞬移/
+            # 首帧选错锁死），清空缓存，下一帧按"首帧"全图重新锁定
+            self._skip_counter = 0
+            self._last_foot = None
+            self._last_center = None
+        return None
+
+    def _select_candidate(self, candidates):
+        """在候选列表中选择本帧采用的匹配。
+
+        策略：
+          - 无上次位置（首帧/缓存已清空）→ 直接取置信度最高的候选
+          - 有上次位置 → 只接受"偏移 <= _max_jump"的候选（角色不会
+            瞬移，跳变过大必是误识别），剩下的取置信度最高
+          - 全部跳变过大 → 返回 None，由调用方计入 _skip_counter，
+            连续多帧异常才接受新位置重新锁定，避免单帧误识别污染缓存
+
+        Args:
+            candidates: [(中心点, 置信度), ...]
+
+        Returns:
+            (中心点, 置信度) 或 None
+        """
+        last = self._last_foot
+        if last is None:
+            return max(candidates, key=lambda c: c[1])
+        nearby = [
+            c for c in candidates
+            if abs(c[0][0] - last[0]) + abs(c[0][1] - last[1]) <= self._max_jump
+        ]
+        if nearby:
+            return max(nearby, key=lambda c: c[1])
+        return None
+
+    def _commit(self, chosen):
+        """把选中的候选写入缓存并返回 (center_x, center_y, foot_x, foot_y)。"""
+        (name_cx, name_cy), _ = chosen
+        foot = (name_cx, name_cy)
+        # 角色中心 = 名字中心向上延伸"人物高度一半"（-30px）
+        center = (name_cx, name_cy - self._character_height // 2)
         self._last_center = center
         self._last_foot = foot
         return (*center, *foot)
 
     def _match_in_roi(self, engine, roi, name, min_confidence,
-                      offset_x, offset_y):
+                      offset_x, offset_y,
+                      exclude_region: Optional[Tuple[int, int, int, int]] = None):
         """在裁剪区域 roi 内执行 OCR 并匹配名字。
+
+        返回所有匹配候选（全局坐标），已过滤：
+          - 置信度低于 min_confidence
+          - 候选中心落在 exclude_region（UI 固定文字区域）内
+        不做跳变过滤（由 locate() 统一处理）。
 
         Args:
             engine:       RapidOCR 引擎
@@ -194,43 +257,39 @@ class OCRNameLocator:
             name:         角色名
             min_confidence: 最低置信度
             offset_x, offset_y: roi 左上角在整帧中的偏移
+            exclude_region: 排除区域 (x, y, w, h)，候选中心落在其中则丢弃
 
         Returns:
-            (center, foot) 或 None（未匹配到）
+            [(中心点, 置信度), ...]（全局坐标），可能为空列表
         """
         try:
             result, _ = engine(roi)
         except Exception as e:
             self._on_log(f"[定位] OCR 执行异常: {e}")
-            return None
+            return []
         if result is None:
-            return None
+            return []
 
-        # 匹配名字：取置信度最高的候选
-        best = None
-        best_conf = 0.0
+        candidates = []
         for box, text, confidence in result:
             if not self._match(name, text):
                 continue
             if confidence < min_confidence:
                 continue
-            if confidence > best_conf:
-                best_conf = confidence
-                best = box
 
-        if best is None:
-            return None
+            # 名字区域中心（全局坐标）
+            name_cx = int((box[0][0] + box[1][0] + box[2][0] + box[3][0]) / 4) + offset_x
+            name_cy = int((box[0][1] + box[1][1] + box[2][1] + box[3][1]) / 4) + offset_y
 
-        # 名字区域中心（全局坐标）
-        name_cx = int((best[0][0] + best[1][0] + best[2][0] + best[3][0]) / 4) + offset_x
-        name_cy = int((best[0][1] + best[1][1] + best[2][1] + best[3][1]) / 4) + offset_y
+            # 排除区域内的候选（如左下角 UI 面板固定名字）→ 丢弃
+            if exclude_region is not None:
+                ex, ey, ew, eh = exclude_region
+                if ex <= name_cx <= ex + ew and ey <= name_cy <= ey + eh:
+                    continue
 
-        # 脚底 = 名字中心（名字就在脚边，画面 y 向下增大）
-        foot = (name_cx, name_cy)
-        # 角色中心 = 名字中心向上延伸"人物高度一半"（-30px）
-        center = (name_cx, name_cy - self._character_height // 2)
+            candidates.append(((name_cx, name_cy), float(confidence)))
 
-        return center, foot
+        return candidates
 
     def locate_all(self, frame: np.ndarray,
                    min_confidence: float = 0.5) -> list:

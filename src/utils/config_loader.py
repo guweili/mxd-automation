@@ -225,6 +225,9 @@ def _defaults() -> Dict[str, Any]:
         # ---- 自身定位 ----
         "self_name": "",  # 角色脚底名字，用于 OCR 定位
         "self_offset": 85,  # HP 条底部 → 脚底的偏移像素
+        "template_confidence": 0.55,  # 截图模板定位置信度阈值（0~1），
+                                      # 名字被遮挡时截图兜底定位用。过低易误
+                                      # 匹配 UI/NPC，过高导致截图定位不到。
         # ---- HP 检测 ----
         "hp_region": None,  # [x, y, w, h] 参考分辨率下的 HP 条区域
         "hp_color": [51, 204, 51],  # HP 条绿色 RGB

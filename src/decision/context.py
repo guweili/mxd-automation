@@ -52,6 +52,7 @@ Context 字段说明
   mp_ratio:       蓝量比例 0.0~1.0
   detections:     全部 YOLO 检测结果（含所有类别）
 """
+import random
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Callable
 
@@ -112,6 +113,24 @@ STUCK_FRAMES = 60
 
 EXPLORE_DIRECTION_SWITCH_FRAMES = 180
 """探索方向切换帧数：探索状态下持续此帧数没遇到怪就换方向"""
+
+LOST_DIRECTION_SWITCH_MIN = 30
+LOST_DIRECTION_SWITCH_MAX = 150
+"""迷失恢复方向切换帧数随机范围（约 1.5~7.5 秒 @20fps）。
+
+自身定位失败（迷失）时，探索状态走"左右来回走 + 随机跳"的恢复策略。
+每次换方向都随机抽一个持续时长：既避免角色无脑往一个方向跑出屏幕，
+也让移动节奏随机化（不像固定间隔那样容易被判定为脚本）。
+"""
+
+LOST_JUMP_INTERVAL_MIN = 20
+LOST_JUMP_INTERVAL_MAX = 70
+"""迷失恢复跳跃间隔帧数随机范围（约 1~3.5 秒 @20fps）。
+
+未定位时按随机间隔按跳跃键：角色名字在脚下，被地图/UI 遮挡时
+OCR 看不到，跳起来能让名字/身体从遮挡层露出来，便于重新定位。
+间隔随机化避免固定节奏；press_key 自带 cooldown 兜底限频。
+"""
 
 DISTANCE_LOG_FRAMES = 60
 """距离推算日志输出间隔帧数（避免刷屏）"""
@@ -265,6 +284,15 @@ class DecisionEngine:
         self._occluded_frames = 0                 # 目标被角色遮挡的连续帧数（虚拟目标维持）
         self._self_pos_stale_frames = 0           # 自身定位连续失败的帧数（最后已知位置时效）
 
+        # 迷失恢复（未定位时左右来回走 + 随机跳）
+        self._lost_frame_count = 0                # 当前迷失会话累计帧数
+        self._lost_switch_frames = random.randint(  # 下一次换方向的随机帧数
+            LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
+        )
+        self._lost_jump_frames = random.randint(  # 下一次跳跃的随机帧数
+            LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
+        )
+
     def update_config(self, config: Config):
         self.config = config
 
@@ -279,6 +307,13 @@ class DecisionEngine:
         self._attack_stale_counter = 0
         self._face_dir = None
         self._melee_leave_frames = 0
+        self._lost_frame_count = 0
+        self._lost_switch_frames = random.randint(
+            LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
+        )
+        self._lost_jump_frames = random.randint(
+            LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
+        )
         self._occluded_frames = 0
         self._self_pos_stale_frames = 0
         self.release_keys()
@@ -1467,8 +1502,47 @@ class DecisionEngine:
           - 遇到平台边缘（脚下没地板）就跳
           - 卡住时反向走
           - 长时间没遇到怪就换方向
+
+        自身定位失败（迷失）时走"恢复定位"分支：
+          左右来回走 + 定期跳跃。让角色名字/身体从地图遮挡中露出来，
+          尽快被 OCR/模板重新定位；避免无脑朝一个方向跑出屏幕，
+          越跑越定位不到（老版本一直往右跑就是这个问题）。
         """
         self._explore_frame_count += 1
+
+        # ---- 迷失恢复：自身定位失败，左右来回走 + 随机跳跃 ----
+        if ctx.self_position is None:
+            self._lost_frame_count += 1
+            # 卡住 → 反向 + 跳跃（少数情况下角色卡在地形里）
+            if self._stuck_counter >= STUCK_FRAMES:
+                self._log("[探索] 未定位且卡住，跳跃并反向")
+                self._explore_direction = "left" if self._explore_direction == "right" else "right"
+                self.executor.press_key(self.config.jump_key, cooldown=1.0)
+                self._stuck_counter = 0
+                self._lost_frame_count = 0
+                return
+            # 随机间隔跳跃：让名字/身体从遮挡层露出来便于重新定位
+            if self._lost_frame_count >= self._lost_jump_frames:
+                self.executor.press_key(self.config.jump_key, cooldown=1.0)
+                self._lost_jump_frames = self._lost_frame_count + random.randint(
+                    LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
+                )
+            # 随机时长换方向：避免一路跑出屏幕，也不固定节奏
+            if self._lost_frame_count >= self._lost_switch_frames:
+                self._explore_direction = "left" if self._explore_direction == "right" else "right"
+                self._lost_frame_count = 0
+                self._lost_switch_frames = random.randint(
+                    LOST_DIRECTION_SWITCH_MIN, LOST_DIRECTION_SWITCH_MAX
+                )
+                self._lost_jump_frames = random.randint(
+                    LOST_JUMP_INTERVAL_MIN, LOST_JUMP_INTERVAL_MAX
+                )
+                self._log(
+                    f"[探索] 自身未定位，换方向 → {self._explore_direction} "
+                    f"(随机{self._lost_switch_frames}帧)"
+                )
+            self._hold_move(self._explore_direction)
+            return
 
         if self._stuck_counter >= STUCK_FRAMES:
             self._log("[探索] 卡住了，跳跃并反向")

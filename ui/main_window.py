@@ -214,6 +214,16 @@ class MainWindow(QMainWindow):
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("输入角色名, 如 我是立立")
         g.addWidget(self.name_edit, 4, 1, 1, 2)
+
+        g.addWidget(QLabel("角色模板:"), 5, 0)
+        template_row = QHBoxLayout()
+        self.template_btn = QPushButton("上传角色全身照")
+        self.template_btn.clicked.connect(self._browse_template)
+        template_row.addWidget(self.template_btn)
+        self.template_status = QLabel("未上传")
+        self.template_status.setStyleSheet("color:#c0392b;")
+        template_row.addWidget(self.template_status, 1)
+        g.addLayout(template_row, 5, 1, 1, 2)
         return box
 
     def _build_hp_group(self):
@@ -382,6 +392,15 @@ class MainWindow(QMainWindow):
         self.classes_edit.setText(c.monster_classes)
         self.fps_spin.setValue(c.fps)
         self.name_edit.setText(c.self_name)
+        # 角色模板状态：检查 exe 旁边（开发环境=项目根目录）是否已存在
+        if os.path.isfile(
+            os.path.join(APP_DIR, "assets", "templates", "player_template.png")
+        ):
+            self.template_status.setText("已加载")
+            self.template_status.setStyleSheet("color:#27ae60;")
+        else:
+            self.template_status.setText("未上传")
+            self.template_status.setStyleSheet("color:#c0392b;")
         self.hp_key_edit.setText(c.hp_key)
         self.hp_thr_spin.setValue(int(c.hp_threshold * 100))
         if c.hp_color:
@@ -561,6 +580,32 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.model_edit.setText(path)
+
+    def _browse_template(self):
+        """上传角色全身照作为外观模板（换时装/换地图后重新上传，立即生效）。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择角色全身照", "",
+            "图片文件 (*.png *.jpg *.jpeg *.bmp);;所有文件 (*.*)"
+        )
+        if not path:
+            return
+        try:
+            import shutil
+            # 保存到 exe 旁边（开发环境 = 项目根目录），可写、持久化
+            save_dir = os.path.join(APP_DIR, "assets", "templates")
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, "player_template.png")
+            shutil.copyfile(path, save_path)
+            # 立即热加载，无需重启
+            self.automation.set_player_template(save_path)
+            self.template_status.setText("已加载")
+            self.template_status.setStyleSheet("color:#27ae60;")
+            self._log(f"[模板] 角色全身照已上传: {save_path}")
+        except Exception as e:
+            self.template_status.setText("加载失败")
+            self.template_status.setStyleSheet("color:#c0392b;")
+            self._log(f"[模板] 上传失败: {e}")
+            QMessageBox.warning(self, "模板上传失败", str(e))
 
     @staticmethod
     def _set_swatch(swatch, rgb):

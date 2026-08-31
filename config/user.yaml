@@ -4,13 +4,14 @@ reference_width: 1368
 reference_height: 800
 fps: 30
 keyboard_mode: sendinput
-confidence: 0.2
+confidence: 0.49
 model_path: E:/pythonProjects/mxd-automation/train/scripts/02_train_yolo/model/best.pt
 monster_classes: monster
 floor_classes: floor
 rope_classes: rope
 self_name: 我是立立
 self_offset: 85
+template_confidence: 0.55
 hp_region:
 - 0.3675
 - 0.974
