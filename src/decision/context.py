@@ -219,6 +219,14 @@ SELF_POS_STALE_FRAMES = 60
 超过该帧数仍定位不到 → 判定真丢失，避免用过期坐标乱跑。
 """
 
+LOST_RECOVER_TRIGGER_FRAMES = 90
+"""自身连续定位失败多少帧后，无条件转入迷失恢复（约 3 秒 @30fps）。
+
+角色走到角落/名字被地图遮挡时，OCR 和截图都可能定位不到。若一直
+卡在原地不动，角色会永远定位不到（走不出来）。连续定位失败满 3 秒
+就无条件开始随机移动，让角色尽快从角落/遮挡中走出来重新被定位。
+"""
+
 
 @dataclass
 class Context:
@@ -381,7 +389,23 @@ class DecisionEngine:
                     )
                     return
 
-        # ---- 优先级 3: 检测到怪物 ----
+        # ---- 优先级 3: 自身长时间未定位 → 迷失恢复 ----
+        # 角色走到角落/名字被地图遮挡时，OCR 和截图都可能定位不到。
+        # 此时无论画面里有没有怪物，只要连续定位失败超过阈值，就无条件
+        # 转入迷失恢复（左右随机移动 + 随机跳跃），让角色从角落走出来、
+        # 名字/身体重新露出被定位，而不是卡在原地不动。
+        # 注意：必须放在怪物检测之前，否则"有怪但定位不到"时会走攻击
+        # 分支，而攻击分支遇到 self_position=None 只释放移动不移动，
+        # 导致角色卡在角落 30 秒不动。
+        if ctx.self_position is None \
+                and self._self_pos_stale_frames >= LOST_RECOVER_TRIGGER_FRAMES:
+            self._fsm.transition(State.IDLE)
+            self._target_monster = None
+            self._attack_stale_counter = 0
+            self._explore(ctx)
+            return
+
+        # ---- 优先级 4: 检测到怪物 ----
         if ctx.monsters:
             self._handle_monsters(ctx)
         elif self._fsm.current == State.ATTACKING and self._target_monster is not None:
