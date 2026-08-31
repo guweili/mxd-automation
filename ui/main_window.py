@@ -33,7 +33,7 @@ from PyQt5.QtGui import QImage, QPixmap
 
 from src.utils.config_loader import (
     load_config, save_config, save_user_config, config_path, resolve_model_path,
-    APP_DIR, BUNDLE_DIR,
+    resolve_template_path, APP_DIR, BUNDLE_DIR,
 )
 from src.perception.yolo_detector import create_detector
 from src.perception.hp_mp_detector import detect_region_color
@@ -393,9 +393,7 @@ class MainWindow(QMainWindow):
         self.fps_spin.setValue(c.fps)
         self.name_edit.setText(c.self_name)
         # 角色模板状态：检查 exe 旁边（开发环境=项目根目录）是否已存在
-        if os.path.isfile(
-            os.path.join(APP_DIR, "assets", "templates", "player_template.png")
-        ):
+        if os.path.isfile(resolve_template_path()):
             self.template_status.setText("已加载")
             self.template_status.setStyleSheet("color:#27ae60;")
         else:
@@ -592,9 +590,8 @@ class MainWindow(QMainWindow):
         try:
             import shutil
             # 保存到 exe 旁边（开发环境 = 项目根目录），可写、持久化
-            save_dir = os.path.join(APP_DIR, "assets", "templates")
-            os.makedirs(save_dir, exist_ok=True)
-            save_path = os.path.join(save_dir, "player_template.png")
+            save_path = resolve_template_path()
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             shutil.copyfile(path, save_path)
             # 立即热加载，无需重启
             self.automation.set_player_template(save_path)

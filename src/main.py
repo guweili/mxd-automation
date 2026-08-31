@@ -50,8 +50,8 @@
   2. PlayerTracker 外观模板跟踪（次方案，名字被遮挡时启用）
      原理: 用户截取角色全身图作为模板 → cv2.matchTemplate 多尺度匹配 →
            一旦锁定，下一帧只在附近局部搜索（加速）。
-     条件: 模板已上传（exe 界面"上传角色全身照"或 assets/templates/player_template.png）；
-           换时装/换地图需重新上传。
+     条件: 模板已上传（exe 界面"上传角色全身照"，保存位置由 resolve_template_path()
+           统一解析，即 exe 旁边 / 项目根目录的 assets/templates/）；换时装/换地图需重新上传。
      优点: 不依赖名字 OCR，角色下半身被地图挡住也能定位。
      缺点: 依赖外观特征，时装/姿势变化大时可能匹配不上。
 
@@ -79,7 +79,7 @@ from .perception.ocr_name_locator import OCRNameLocator
 from .perception.player_tracker import PlayerTracker
 from .execution.action_executor import ActionExecutor
 from .decision.context import Context, DecisionEngine
-from .utils.config_loader import Config, resolve_model_path
+from .utils.config_loader import Config, resolve_model_path, resolve_template_path
 
 
 class Automation:
@@ -154,16 +154,17 @@ class Automation:
         )
 
         # ---- 外观模板跟踪器（名字被地图/UI 遮挡时的次方案）----
+        # 模板路径由 resolve_template_path() 统一解析（exe 旁边 / 项目根目录），
+        # 即界面"上传角色全身照"写入的位置，不在代码里写死字符串。
+        self._player_template_path = resolve_template_path()
         try:
-            self._player = self._create_player_tracker(
-                "assets/templates/player_template.png"
-            )
+            self._player = self._create_player_tracker(self._player_template_path)
             self.on_log("[模板] 角色外观模板加载成功")
         except FileNotFoundError:
             self._player = None
             self.on_log(
-                "[模板] 未找到角色模板 assets/templates/player_template.png，"
-                "外观跟踪不可用（可在界面点\"上传角色全身照\"）"
+                "[模板] 未找到角色模板，外观跟踪不可用"
+                "（可在界面点\"上传角色全身照\"）"
             )
 
         # ---- 角色位置缓存 ----

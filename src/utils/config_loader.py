@@ -131,6 +131,22 @@ def resolve_model_path(raw_path: str) -> str:
     return os.path.normpath(os.path.join(APP_DIR, raw_path))
 
 
+# ---- 角色外观模板路径 ----
+# 用户通过界面"上传角色全身照"上传的截图统一保存到此处（exe 旁边，可写、持久化）。
+# UI 上传、主循环加载、日志提示都应引用同一个路径，避免多处写死不一致。
+TEMPLATE_FILENAME = "player_template.png"
+
+
+def resolve_template_path() -> str:
+    """返回角色外观模板的绝对路径。
+
+    始终指向 APP_DIR/assets/templates/player_template.png（exe 旁边，开发环境 = 项目根目录）。
+    该文件由界面"上传角色全身照"写入；开发环境也可能直接手动放置同名文件。
+    与 resolve_model_path 不同：模板只存一份用户数据，不回退 BUNDLE_DIR。
+    """
+    return os.path.join(APP_DIR, "assets", "templates", TEMPLATE_FILENAME)
+
+
 def config_path() -> str:
     """返回当前生效的配置文件路径。
 

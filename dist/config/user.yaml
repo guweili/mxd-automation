@@ -5,11 +5,11 @@ reference_height: 800
 fps: 30
 keyboard_mode: sendinput
 confidence: 0.49
-model_path: E:/pythonProjects/mxd-automation/train/scripts/02_train_yolo/model/best.pt
+model_path: E:/pythonProjects/mxd-automation/train/scripts/02_train_yolo/model/best.onnx
 monster_classes: monster
 floor_classes: floor
 rope_classes: rope
-self_name: 我是立立
+self_name: 彤彤是我
 self_offset: 85
 template_confidence: 0.55
 hp_region:
@@ -39,7 +39,7 @@ mp_key: pdn
 target_key: tab
 jump_key: c
 attack_type: long
-attack_range: 300
+attack_range: 150
 attack_range_y: 55
 skills:
 - name: 技能1
