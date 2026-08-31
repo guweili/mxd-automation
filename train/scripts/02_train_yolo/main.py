@@ -37,7 +37,7 @@ BATCH = 16
 IMG_SIZE = 640
 
 # 训练设备：0 = 第一块 CUDA GPU，"cpu" = 仅用 CPU
-DEVICE = "cpu"
+DEVICE = "0"
 
 # 验证集比例（0.2 = 20% 数据用于验证）
 VAL_SPLIT = 0.2

@@ -10,7 +10,7 @@ imgsz: 640
 save: true
 save_period: -1
 cache: false
-device: cpu
+device: '0'
 workers: 4
 project: E:\pythonProjects\mxd-automation\train\scripts\02_train_yolo\runs
 name: train

@@ -9,7 +9,7 @@ model_path: E:/pythonProjects/mxd-automation/train/scripts/02_train_yolo/model/b
 monster_classes: monster
 floor_classes: floor
 rope_classes: rope
-self_name: 彤彤是我
+self_name: 我是立立
 self_offset: 85
 hp_region:
 - 0.3675
@@ -37,8 +37,8 @@ mp_threshold: 0.5
 mp_key: pdn
 target_key: tab
 jump_key: c
-attack_type: short
-attack_range: 50
+attack_type: long
+attack_range: 300
 attack_range_y: 55
 skills:
 - name: 技能1
