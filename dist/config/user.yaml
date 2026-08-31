@@ -5,7 +5,7 @@ reference_height: 800
 fps: 30
 keyboard_mode: sendinput
 confidence: 0.49
-model_path: E:/pythonProjects/mxd-automation/train/scripts/02_train_yolo/model/best.onnx
+model_path: E:/pythonProjects/mxd-automation/dist/best.onnx
 monster_classes: monster
 floor_classes: floor
 rope_classes: rope
