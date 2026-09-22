@@ -5,7 +5,7 @@ reference_height: 800
 fps: 30
 keyboard_mode: sendinput
 confidence: 0.5
-model_path: best.onnx
+model_path: E:/pythonProjects/mxd-automation/dist/best.onnx
 monster_classes: monster
 floor_classes: floor
 rope_classes: rope
@@ -38,8 +38,8 @@ mp_threshold: 0.5
 mp_key: pdn
 target_key: tab
 jump_key: c
-attack_type: short
-attack_range: 50
+attack_type: long
+attack_range: 300
 attack_range_y: 55
 skills:
 - name: 技能1
