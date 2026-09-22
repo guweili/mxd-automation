@@ -24,13 +24,20 @@ import cv2
 # 高 DPI 显示器上，如果不设置 DPI 感知，GetClientRect 返回逻辑坐标
 # 而 BitBlt 返回物理像素，两者不匹配导致坐标偏移。
 #
+# 优先使用 Per-Monitor V2（Win10 1703+，兼容 Win11），确保多显示器、
+# 不同 DPI 缩放场景下 GetClientRect 都返回物理像素，避免截图比实际窗口小。
+# 回退到 SetProcessDPIAware 兼容旧版 Windows。
+#
 # 注意：此调用可能因 PyQt5 先初始化而失效（GUI 模式下）。
-# 真正生效的 DPI 设置在 main.py / ui/main_window.py 中完成，
-# 那里在 QApplication 创建之前就调用了 SetProcessDPIAware()。
+# 真正生效的 DPI 设置在 main.py 中完成，那里在 QApplication 创建之前调用。
 try:
-    ctypes.windll.user32.SetProcessDPIAware()
+    # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 except Exception:
-    pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 
 class ScreenCapture:

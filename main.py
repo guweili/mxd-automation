@@ -42,9 +42,13 @@ os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "0"
 
 # 设置 Windows 进程级 DPI 感知
 try:
-    ctypes.windll.user32.SetProcessDPIAware()
+    # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (HANDLE)-4
+    ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 except Exception:
-    pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 # 把项目根目录加入 sys.path，让 `src` / `ui` 作为顶层包可被导入
 _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
