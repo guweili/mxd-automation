@@ -225,7 +225,7 @@ def _defaults() -> Dict[str, Any]:
         "reference_width": 1366,
         "reference_height": 768,
         # ---- 性能 ----
-        "fps": 13,
+        "fps": 60,
         # ---- 执行 ----
         # 键盘注入模式:
         #   使用 SendInput 驱动层模拟真实全局按键，游戏窗口必须在前台。

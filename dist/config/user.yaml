@@ -2,7 +2,7 @@ window_title: 冒险岛怀旧服
 start_stop_hotkey: F6
 reference_width: 1368
 reference_height: 800
-fps: 30
+fps: 60
 keyboard_mode: sendinput
 confidence: 0.5
 model_path: E:/pythonProjects/mxd-automation/dist/best.onnx

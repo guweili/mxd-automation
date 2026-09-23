@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
 
         g.addWidget(QLabel("检测FPS:"), 3, 0)
         self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(1, 30)
+        self.fps_spin.setRange(1, 60)
         self.fps_spin.setValue(8)
         g.addWidget(self.fps_spin, 3, 1, 1, 2)
 
