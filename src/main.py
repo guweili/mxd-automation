@@ -192,6 +192,13 @@ class Automation:
         self._locate_method: Optional[str] = None               # 当前定位方式: ocr / template
         self._locate_failed_notified = False                    # 定位失败兜底提示是否已发出（限频用）
 
+        # ---- OCR 定位节流 ----
+        # OCR 推理慢（几十~上百 ms/帧），每帧都跑会拖慢主循环。
+        # 策略：模板跟踪每帧跑（局部搜索快），OCR 每 N 帧跑一次校准模板 drift。
+        # ocr_every_n_frames=3: 每 3 帧跑一次 OCR（60FPS 下约 20FPS 的 OCR 校准）。
+        self._ocr_frame_counter = 0
+        self._ocr_every_n_frames = 3
+
         # ---- HP/MP 变化追踪 ----
         self._last_hp_ratio: Optional[float] = None
         self._last_mp_ratio: Optional[float] = None
@@ -482,7 +489,9 @@ class Automation:
         )
 
         # ---- 5. 自身定位 ----
+        _t_loc = time.time()
         self_pos = self._locate_self(frame)
+        _loc_ms = (time.time() - _t_loc) * 1000
 
         # ---- HP/MP 变化检测 ----
         if hp_ratio is not None:
@@ -516,6 +525,11 @@ class Automation:
                     )
             else:
                 self.on_log(f"[状态] HP={hp_str} MP={mp_str} 自身未定位")
+            # 性能诊断：定位耗时 + 单帧总耗时
+            self.on_log(
+                f"[性能] 定位={_loc_ms:.0f}ms 帧总={(time.time()-t0)*1000:.0f}ms "
+                f"YOLO缓存={len(detections)}个"
+            )
 
         # ---- 6. 决策与执行 ----
         # Context 是感知层 → 决策层的数据载体
@@ -606,39 +620,50 @@ class Automation:
         """
         h, w = frame.shape[:2]
 
-        # ---- 1. OCR 名字定位（主方案）----
-        # 涂黑底部 UI 条（全宽度），避免 OCR 认到左下角固定 UI 里的同名
-        # 文字。search_region 也排除底部 18%，但同时允许结果落在更下方
-        # ——角色站在地图底部时脚底就在 640~660，OCR 找到名字也要采信。
-        search_region = (0, int(h * 0.10), w, int(h * 0.72))
-        ocr_frame = frame.copy()
-        mask_h = int(h * 0.18)
-        ocr_frame[h - mask_h:h, 0:w] = 0
+        # ---- OCR 节流：每 N 帧才跑一次 OCR，其余帧直接走模板跟踪 ----
+        # OCR 推理慢（几十~上百 ms），每帧跑会拖慢主循环到 10FPS 以下。
+        # 模板局部搜索很快（小窗口 matchTemplate），可每帧跑保持坐标实时。
+        # OCR 每 N 帧校准一次模板 drift，兼顾速度与精度。
+        self._ocr_frame_counter += 1
+        should_run_ocr = (self._ocr_frame_counter % self._ocr_every_n_frames == 0)
+        # 首帧或未定位时必须跑 OCR（模板还没建立基准位置）
+        if self._last_foot_pos is None:
+            should_run_ocr = True
 
-        result = self._ocr.locate(ocr_frame, self.config.self_name,
-                                  search_region=search_region)
-        if result is not None:
-            center_x, center_y, foot_x, foot_y = result
-            # 仅做"明显不合理"的检查：脚底超出画面就丢弃
-            if foot_y < 0 or foot_y >= h or foot_x < 0 or foot_x >= w:
-                self.on_log(
-                    f"[定位] OCR 结果 ({foot_x},{foot_y}) 越界，丢弃"
-                )
-            else:
-                self._cached_center = (center_x, center_y)
-                self._last_foot_pos = (foot_x, foot_y)
-                self._locate_failed_notified = False  # 定位成功，复位失败提示标记
-                if self._locate_method != "ocr":
-                    self._locate_method = "ocr"
-                    self.on_log(f"[定位] 名称识别成功, 切换为名称定位 ({foot_x},{foot_y})")
-                # OCR 命中时回填模板位置，让截图下一帧能续上
-                if self._player is not None:
-                    bw, bh = self._player.tw, self._player.th
-                    px = max(0, foot_x - bw // 2)
-                    py = max(0, int(foot_y - bh * 0.9))
-                    self._player.last_box = (px, py, bw, bh)
-                    self._player.miss_count = 0
-                return (foot_x, foot_y)
+        if should_run_ocr:
+            # ---- 1. OCR 名字定位（主方案）----
+            # 涂黑底部 UI 条（全宽度），避免 OCR 认到左下角固定 UI 里的同名
+            # 文字。search_region 也排除底部 18%，但同时允许结果落在更下方
+            # ——角色站在地图底部时脚底就在 640~660，OCR 找到名字也要采信。
+            search_region = (0, int(h * 0.10), w, int(h * 0.72))
+            ocr_frame = frame.copy()
+            mask_h = int(h * 0.18)
+            ocr_frame[h - mask_h:h, 0:w] = 0
+
+            result = self._ocr.locate(ocr_frame, self.config.self_name,
+                                      search_region=search_region)
+            if result is not None:
+                center_x, center_y, foot_x, foot_y = result
+                # 仅做"明显不合理"的检查：脚底超出画面就丢弃
+                if foot_y < 0 or foot_y >= h or foot_x < 0 or foot_x >= w:
+                    self.on_log(
+                        f"[定位] OCR 结果 ({foot_x},{foot_y}) 越界，丢弃"
+                    )
+                else:
+                    self._cached_center = (center_x, center_y)
+                    self._last_foot_pos = (foot_x, foot_y)
+                    self._locate_failed_notified = False  # 定位成功，复位失败提示标记
+                    if self._locate_method != "ocr":
+                        self._locate_method = "ocr"
+                        self.on_log(f"[定位] 名称识别成功, 切换为名称定位 ({foot_x},{foot_y})")
+                    # OCR 命中时回填模板位置，让截图下一帧能续上
+                    if self._player is not None:
+                        bw, bh = self._player.tw, self._player.th
+                        px = max(0, foot_x - bw // 2)
+                        py = max(0, int(foot_y - bh * 0.9))
+                        self._player.last_box = (px, py, bw, bh)
+                        self._player.miss_count = 0
+                    return (foot_x, foot_y)
 
         # ---- 2. 外观模板跟踪（辅助方案：名字被地图遮挡时）----
         # 角色可以合法地站在地图底部边缘（脚底 y 可达 640~660），
