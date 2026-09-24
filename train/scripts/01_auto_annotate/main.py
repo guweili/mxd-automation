@@ -48,11 +48,11 @@ EPOCHS = 100
 # 是否跳过训练，直接用已有模型推理
 # 设为 True 时：不清空 auto_work，不复训练，直接用上次的 best.pt 推理
 # 适用场景：训练完看效果不满意，调了置信度阈值想重新推理
-SKIP_TRAIN = False
+SKIP_TRAIN = True
 
 # 训练设备：0 = 第一块 CUDA GPU，"cpu" = 仅用 CPU
 # ultralytics 会自动检测 CUDA，这里显式指定确保使用 GPU
-DEVICE = 0
+DEVICE = "cpu"
 
 # ============================================================
 
@@ -380,8 +380,10 @@ def main():
         if DEVICE != "cpu" and not torch.cuda.is_available():
             print("[警告] CUDA 不可用，将回退到 CPU 训练")
             print("请检查: 1) NVIDIA 驱动  2) CUDA Toolkit  3) pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118")
-        else:
+        elif DEVICE != "cpu" and torch.cuda.is_available():
             print(f"[CUDA] 可用，设备: {torch.cuda.get_device_name(0)}")
+        else:
+            print("[设备] 使用 CPU 训练（无 CUDA）")
     except ImportError:
         print("[警告] 未安装 torch，无法检测 CUDA 状态")
 
