@@ -77,6 +77,7 @@ from .perception.yolo_detector import Detector, create_detector
 from .perception.hp_mp_detector import detect_bar_ratio
 from .perception.ocr_name_locator import OCRNameLocator
 from .perception.player_tracker import PlayerTracker
+from .perception.monster_tracker import MonsterTracker
 from .execution.action_executor import ActionExecutor
 from .decision.context import Context, DecisionEngine
 from .utils.config_loader import Config, resolve_model_path, resolve_template_path
@@ -155,6 +156,14 @@ class Automation:
         self._yolo_lock = threading.Lock()
         self._latest_frame_for_yolo: Optional[np.ndarray] = None
         self._latest_detections: list = []
+        # YOLO 结果版本号：后台线程每次检测完 +1，主循环据此判断是否有新结果
+        self._yolo_result_version: int = 0
+        self._last_yolo_version: int = -1
+
+        # ---- 怪物多目标 KCF 跟踪器 ----
+        # YOLO 检测慢（CPU 5~15FPS），用 KCF 跟踪器在两次 YOLO 检测之间
+        # 每帧实时更新怪物位置，实现怪物框 60FPS 跟随。
+        self._monster_tracker = MonsterTracker()
 
         # ---- OCR 名字定位器（延迟初始化，首次使用时才加载模型）----
         # ocr_interval=1: 每帧都执行 OCR（和 YOLO 一样），位置实时更新
@@ -342,6 +351,8 @@ class Automation:
         self.engine.release_keys()  # 释放按住的方向键/上键
         if self._player is not None:
             self._player.reset()     # 重置外观跟踪器
+        self._monster_tracker.reset()  # 重置怪物 KCF 跟踪器
+        self._last_yolo_version = -1
         self._last_foot_pos = None   # 重置脚底位置缓存
         self.on_log("[停止] 自动打怪已停止")
 
@@ -393,6 +404,7 @@ class Automation:
                     dets = []
                 with self._yolo_lock:
                     self._latest_detections = dets
+                    self._yolo_result_version += 1
             else:
                 time.sleep(0.005)
 
@@ -442,12 +454,22 @@ class Automation:
         self._latest_frame_for_yolo = frame
         with self._yolo_lock:
             detections = list(self._latest_detections)
+            yolo_version = self._yolo_result_version
 
         # 按类别名过滤（配置中可能用逗号分隔多个类别名）
         monster_classes = self._monster_classes()
-        monsters = [d for d in detections if d.cls_name in monster_classes]
         floors = [d for d in detections if d.cls_name in self._floor_classes()]
         ropes = [d for d in detections if d.cls_name in self._rope_classes()]
+
+        # ---- 怪物 KCF 实时跟踪 ----
+        # YOLO 检测慢，用 KCF 跟踪器每帧更新怪物位置，实现怪物框 60FPS 跟随。
+        # 当 YOLO 有新结果时（版本号变化），用 refresh 校正/新增/删除跟踪器。
+        if yolo_version != self._last_yolo_version:
+            self._last_yolo_version = yolo_version
+            yolo_monsters = [d for d in detections if d.cls_name in monster_classes]
+            monsters = self._monster_tracker.refresh(yolo_monsters, frame)
+        else:
+            monsters = self._monster_tracker.update(frame)
 
         # 每 30 帧输出一次地图元素概览（YOLO 基于当前截图分析的结果）
         if self._frame_count % 30 == 0:

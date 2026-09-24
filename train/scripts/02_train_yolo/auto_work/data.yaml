@@ -1,9 +1,0 @@
-path: E:/pythonProjects/mxd-automation/train/scripts/02_train_yolo/auto_work
-train: images/train
-val: images/val
-
-names:
-  0: floor
-  1: monster
-  2: rope
-nc: 3

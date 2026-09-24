@@ -419,7 +419,7 @@ def main():
             else:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 未找到冒险岛窗口，继续搜索...")
 
-            time.sleep(10)
+            time.sleep(1)
 
     except KeyboardInterrupt:
         print(f"\n已停止，共截图 {count} 次")
