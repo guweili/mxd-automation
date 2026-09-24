@@ -1,0 +1,26 @@
+<annotation>
+	<folder>raw</folder>
+	<filename>mxd_20260830_213448_062050.png</filename>
+	<path>E:\pythonProjects\mxd-automation\train\data\raw\mxd_20260830_213448_062050.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>1366</width>
+		<height>768</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>monster</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>600</xmin>
+			<ymin>625</ymin>
+			<xmax>631</xmax>
+			<ymax>653</ymax>
+		</bndbox>
+	</object>
+</annotation>
