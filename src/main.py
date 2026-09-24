@@ -144,6 +144,18 @@ class Automation:
         self._frame_count = 0  # 帧计数器（用于限频日志）
         self._grab_fail_count = 0  # 连续截图失败计数（限频日志用）
 
+        # ---- YOLO 后台检测线程 ----
+        # YOLO 计算量大（CPU 上每帧几十~几百 ms），若放在主循环串行执行会
+        # 拖慢自身定位/HP检测/决策的刷新频率。
+        # 方案：YOLO 放在独立线程里对"最新帧"持续检测，结果写入缓存；
+        # 主循环以 60FPS 跑：每帧截图→自身定位→HP/MP→决策（用缓存的检测结果）。
+        # 这样人物坐标每帧实时更新，怪物检测框按 YOLO 自身速度刷新。
+        self._yolo_running = False
+        self._yolo_thread = None
+        self._yolo_lock = threading.Lock()
+        self._latest_frame_for_yolo: Optional[np.ndarray] = None
+        self._latest_detections: list = []
+
         # ---- OCR 名字定位器（延迟初始化，首次使用时才加载模型）----
         # ocr_interval=1: 每帧都执行 OCR（和 YOLO 一样），位置实时更新
         # character_height=60: 人物高度约 60px，角色中心 = 名字中心 - 高度一半（向上）
@@ -300,6 +312,12 @@ class Automation:
         # daemon=True: 主线程退出时自动结束，不会卡住进程
         self._last_foot_pos = None
         self._cached_center = None
+        # 启动 YOLO 后台检测线程（独立于主循环，持续对最新帧做检测）
+        self._latest_detections = []
+        self._latest_frame_for_yolo = None
+        self._yolo_running = True
+        self._yolo_thread = threading.Thread(target=self._yolo_loop, daemon=True)
+        self._yolo_thread.start()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         self.on_log("[启动] 自动打怪已开始")
@@ -313,6 +331,7 @@ class Automation:
         if not self._running:
             return
         self._running = False
+        self._yolo_running = False  # 停止 YOLO 后台检测线程
         self.engine.release_keys()  # 释放按住的方向键/上键
         if self._player is not None:
             self._player.reset()     # 重置外观跟踪器
@@ -349,6 +368,26 @@ class Automation:
                 for line in traceback.format_exc().splitlines():
                     self.on_log(f"  {line}")
                 time.sleep(interval)
+
+    def _yolo_loop(self):
+        """YOLO 后台检测线程。
+
+        持续对主循环提交的"最新帧"做 YOLO 检测，结果写入缓存供主循环读取。
+        检测速度由硬件决定（CPU 上通常 5~15 FPS），但不会阻塞主循环的
+        自身定位/HP检测/决策，因此人物坐标可每帧实时更新。
+        """
+        while self._yolo_running:
+            frame = self._latest_frame_for_yolo
+            if frame is not None:
+                try:
+                    dets = self.detector.detect(frame)
+                except Exception as e:
+                    self.on_log(f"[错误] YOLO检测失败: {e}")
+                    dets = []
+                with self._yolo_lock:
+                    self._latest_detections = dets
+            else:
+                time.sleep(0.005)
 
     def _loop_frame(self, interval: float):
         """单帧执行：截图→检测→HP/MP→定位→决策→预览。"""
@@ -390,14 +429,12 @@ class Automation:
             time.sleep(interval)
             return
 
-        # ---- 2. YOLO 检测 ----
-        # detect() 返回 [Detection, ...]，每个 Detection 包含:
-        #   cls_name, confidence, x, y, w, h, center
-        try:
-            detections = self.detector.detect(frame)
-        except Exception as e:
-            self.on_log(f"[错误] 检测失败: {e}")
-            detections = []
+        # ---- 2. YOLO 检测（后台线程，主循环读取缓存结果）----
+        # 把当前帧交给 YOLO 后台线程检测；主循环直接读取上一次的检测结果。
+        # 这样人物定位/HP检测/决策可以每帧(60FPS)实时刷新，不受 YOLO 速度限制。
+        self._latest_frame_for_yolo = frame
+        with self._yolo_lock:
+            detections = list(self._latest_detections)
 
         # 按类别名过滤（配置中可能用逗号分隔多个类别名）
         monster_classes = self._monster_classes()

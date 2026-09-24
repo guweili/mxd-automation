@@ -69,6 +69,14 @@ class MainWindow(QMainWindow):
         self._preview_timer = QTimer(self)
         self._preview_timer.timeout.connect(self._update_fps)
 
+        # 预览画面与检测循环解耦：检测循环按自身节奏跑（YOLO+OCR较慢），
+        # 预览用独立定时器以 ~60FPS 直接截图并叠加最新检测结果，保证画面流畅。
+        self._last_detections = []
+        self._last_hp_ratio = None
+        self._last_mp_ratio = None
+        self._render_timer = QTimer(self)
+        self._render_timer.timeout.connect(self._render_preview)
+
         self._init_ui()
         self._load_config_to_ui()
 
@@ -679,6 +687,7 @@ class MainWindow(QMainWindow):
                 "padding:10px;font-size:14px;font-weight:bold;"
                 "background-color:#27ae60;color:white;"
             )
+            self._render_timer.stop()
             return
 
         # 启动前: 读 UI → 存配置 → (必要时)重建检测器 → 锁窗口 → 启动
@@ -723,6 +732,8 @@ class MainWindow(QMainWindow):
             "background-color:#c0392b;color:white;"
         )
         self._preview_timer.start(1000)
+        # 预览渲染定时器：~60FPS（16ms 间隔）独立截图渲染，与检测循环解耦
+        self._render_timer.start(16)
 
     def _on_log(self, msg):
         ts = time.strftime("%H:%M:%S")
@@ -731,6 +742,22 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     def _on_frame(self, frame, detections, hp_ratio, mp_ratio):
+        """检测线程回调：仅缓存最新检测结果，画面渲染由 _render_preview 负责。
+
+        这样预览可以以 ~60FPS 独立刷新，不受 YOLO/OCR 检测速度限制。
+        """
+        self._last_detections = detections
+        self._last_hp_ratio = hp_ratio
+        self._last_mp_ratio = mp_ratio
+
+    def _render_preview(self):
+        """以 ~60FPS 独立截图并叠加最新检测结果，保证预览画面流畅。"""
+        if not self.automation.window_locked:
+            return
+        try:
+            frame = self.automation.capture.grab()
+        except Exception:
+            return
         if frame is None:
             return
         h, w = frame.shape[:2]
@@ -741,7 +768,7 @@ class MainWindow(QMainWindow):
         monster_classes = [c.strip() for c in self.config.monster_classes.split(",")]
         floor_classes = [c.strip() for c in self.config.floor_classes.split(",")]
         rope_classes = [c.strip() for c in self.config.rope_classes.split(",")]
-        for d in detections:
+        for d in self._last_detections:
             if d.cls_name in monster_classes:
                 color = (0, 255, 0)          # 绿色: 怪物
             elif d.cls_name in rope_classes:
@@ -776,10 +803,10 @@ class MainWindow(QMainWindow):
             cv2.putText(disp, "self", (sx + 8, sy + 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
         # HP / MP 文本
-        hp_text = f"HP: {hp_ratio:.0%}" if hp_ratio is not None else "HP: -"
+        hp_text = f"HP: {self._last_hp_ratio:.0%}" if self._last_hp_ratio is not None else "HP: -"
         cv2.putText(disp, hp_text, (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        mp_text = f"MP: {mp_ratio:.0%}" if mp_ratio is not None else "MP: -"
+        mp_text = f"MP: {self._last_mp_ratio:.0%}" if self._last_mp_ratio is not None else "MP: -"
         cv2.putText(disp, mp_text, (10, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 128, 0), 2)
 
@@ -796,6 +823,7 @@ class MainWindow(QMainWindow):
         self.fps_label.setText(f"FPS: {fps:.1f}")
         if not self.automation.running:
             self._preview_timer.stop()
+            self._render_timer.stop()
 
     def _log(self, msg):
         self.log_signal.emit(msg)
@@ -812,6 +840,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         try:
             self.automation.stop()
+        except Exception:
+            pass
+        try:
+            self._render_timer.stop()
         except Exception:
             pass
         try:
