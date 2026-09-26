@@ -23,8 +23,49 @@ import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-# 类别映射（与 data.yaml 保持一致）
-CLASSES = {0: "floor", 1: "monster", 2: "rope"}
+# 项目根目录（往上 4 级：main.py → 02_train_yolo → scripts → train → 项目根）
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+os.chdir(PROJECT_ROOT)
+
+# 数据根目录
+DATA_ROOT = os.path.join(PROJECT_ROOT, "train", "data")
+
+# 怪物类别定义：每个文件夹对应一个类别
+MONSTER_DIRS = [
+    "raw_僵尸猴子",
+    "raw_大幽灵",
+    "raw_小幽灵",
+    "raw_灰鳄鱼",
+    "raw_猴子",
+    "raw_石面人",
+    "raw_蓝水灵",
+    "raw_蝙蝠",
+    "raw_青蛇",
+    "raw_鳄鱼",
+]
+
+
+# 目录名 → 类别 ID（跳过无标注的目录）
+def build_class_mapping():
+    cls_id = 0
+    mapping = {}
+    classes = {}
+    for dirname in MONSTER_DIRS:
+        folder = Path(DATA_ROOT) / dirname
+        if not folder.exists():
+            continue
+        xml_files = list(folder.glob("*.xml"))
+        if not xml_files:
+            print(f"[跳过] {dirname} 无标注文件")
+            continue
+        monster_name = dirname.replace("raw_", "")
+        mapping[dirname] = cls_id
+        classes[cls_id] = monster_name
+        cls_id += 1
+    return mapping, classes
+
+
+DIR_TO_CLASS_ID, CLASSES = build_class_mapping()
 NAME_TO_ID = {v: k for k, v in CLASSES.items()}
 
 # 训练轮数
@@ -48,35 +89,24 @@ SEED = 42
 # 预训练模型路径
 MODEL_PATH = "train/model/yolov8n.pt"
 
-# 原始数据目录列表（只读，不会修改），每个目录随机取 SAMPLE_PER_DIR 条数据
-RAW_DIRS = [
-    "train/data/raw",
-    "train/data/raw_石面人",
-]
-
-# 每个目录最多取多少条数据
-SAMPLE_PER_DIR = 100
+# 每个目录最多取多少条数据（None 表示全部）
+SAMPLE_PER_DIR = None
 
 # 工作目录（每次训练自动清空重建）
 WORK_DIR = "train/scripts/02_train_yolo/auto_work"
 
-# 训练输出目录（runs/ 和 model/ 都存在脚本自己的目录下）
+# 训练输出目录
 SCRIPT_DIR = str(Path(__file__).resolve().parent)
 RUNS_DIR = os.path.join(SCRIPT_DIR, "runs")
-MODEL_OUTPUT_DIR = os.path.join(SCRIPT_DIR, "model")
-
-# ============================================================
-
-
-# 确保工作目录在项目根目录（往上 4 级：main.py → 02_train_yolo → scripts → train → 项目根）
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-os.chdir(PROJECT_ROOT)
+# 最终模型保存到 train/model/
+MODEL_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "train", "model")
 
 
-def parse_voc_xml(xml_path: str):
+def parse_voc_xml(xml_path: str, force_class_id: int = None):
     """解析 Pascal VOC XML，返回 (boxes, img_w, img_h)。
 
     boxes: [(class_id, cx, cy, w, h), ...]，坐标已归一化到 [0, 1]
+    若 force_class_id 不为 None，则所有目标都使用该类别 ID（按文件夹区分怪物种类）。
     """
     tree = ET.parse(xml_path)
     root = tree.getroot()
@@ -86,9 +116,12 @@ def parse_voc_xml(xml_path: str):
     boxes = []
     for obj in root.findall("object"):
         name = obj.find("name").text
-        if name not in NAME_TO_ID:
+        if force_class_id is not None:
+            cls_id = force_class_id
+        elif name not in NAME_TO_ID:
             continue
-        cls_id = NAME_TO_ID[name]
+        else:
+            cls_id = NAME_TO_ID[name]
         bbox = obj.find("bndbox")
         xmin = int(bbox.find("xmin").text)
         ymin = int(bbox.find("ymin").text)
@@ -110,11 +143,11 @@ def save_yolo_label(txt_path: str, boxes):
             f.write(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
 
 
-def prepare_data(raw_dirs: list, work_dir: str, sample_per_dir: int = 100):
-    """从多个 raw/ 目录复制数据到 work/，按比例划分训练集和验证集，转 YOLO 格式。
+def prepare_data(work_dir: str, sample_per_dir=None):
+    """从各怪物目录复制数据到 work/，按比例划分训练集和验证集，转 YOLO 格式。
 
-    每个 raw 目录随机取最多 sample_per_dir 条数据。
-    raw/ 下的文件只读不写，全部复制到 work/ 后再处理。
+    每个目录的所有目标都映射为该目录对应的怪物类别。
+    sample_per_dir 为 None 时取该目录全部数据。
     返回 (训练集数量, 验证集数量)。
     """
     work = Path(work_dir)
@@ -133,31 +166,29 @@ def prepare_data(raw_dirs: list, work_dir: str, sample_per_dir: int = 100):
 
     # 从每个目录收集有效数据
     all_items = []
-    for raw_dir in raw_dirs:
-        raw = Path(raw_dir)
+    for dirname, cls_id in DIR_TO_CLASS_ID.items():
+        raw = Path(DATA_ROOT) / dirname
         items = []
         for xml_file in sorted(raw.glob("*.xml")):
             img_file = xml_file.with_suffix(".png")
             if not img_file.exists():
                 img_file = xml_file.with_suffix(".jpg")
             if not img_file.exists():
-                print(f"[警告] 找不到图片: {xml_file.stem}")
                 continue
 
-            boxes, _, _ = parse_voc_xml(str(xml_file))
+            boxes, _, _ = parse_voc_xml(str(xml_file), force_class_id=cls_id)
             if not boxes:
-                print(f"[警告] {xml_file.name} 无有效标注")
                 continue
 
             items.append((img_file, xml_file, boxes))
 
-        # 随机采样最多 sample_per_dir 条
+        # 随机采样
         random.seed(SEED)
         random.shuffle(items)
-        if len(items) > sample_per_dir:
+        if sample_per_dir is not None and len(items) > sample_per_dir:
             items = items[:sample_per_dir]
 
-        print(f"[数据] 从 {raw_dir}/ 选取 {len(items)} 张图片")
+        print(f"[数据] {dirname} → 类别[{cls_id}]{CLASSES[cls_id]}: 选取 {len(items)} 张")
         all_items.extend(items)
 
     # 随机打乱后划分训练集/验证集
@@ -214,9 +245,11 @@ def train():
     from ultralytics import YOLO
 
     print("=" * 60)
-    print("YOLO 训练")
-    print(f"原始数据目录: {RAW_DIRS}")
-    print(f"每目录采样: {SAMPLE_PER_DIR} 张")
+    print("YOLO 怪物分类训练")
+    print(f"类别数: {len(CLASSES)}")
+    for cid, cname in sorted(CLASSES.items()):
+        print(f"  [{cid}] {cname}")
+    print(f"每目录采样: {'全部' if SAMPLE_PER_DIR is None else SAMPLE_PER_DIR} 张")
     print(f"工作目录: {WORK_DIR}  (每次自动清空)")
     print(f"预训练模型: {MODEL_PATH}")
     print(f"训练轮数: {EPOCHS}")
@@ -224,7 +257,7 @@ def train():
     print("=" * 60)
 
     print("\n[步骤1] 准备训练数据...")
-    train_count, val_count = prepare_data(RAW_DIRS, WORK_DIR, SAMPLE_PER_DIR)
+    train_count, val_count = prepare_data(WORK_DIR, SAMPLE_PER_DIR)
     if train_count == 0:
         print("[错误] 没有可用的训练数据，请先手动标注一些图片")
         return
