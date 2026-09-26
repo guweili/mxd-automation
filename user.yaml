@@ -5,10 +5,10 @@ reference_height: 800
 fps: 60
 keyboard_mode: sendinput
 confidence: 0.42
-model_path: train/model/best.pt
+model_path: E:/pythonProjects/mxd-automation/train/model/best.pt
 monster_classes: monster
-floor_classes:
-rope_classes:
+floor_classes: floor
+rope_classes: rope
 self_name: 我是立立
 self_offset: 85
 template_confidence: 0.55
