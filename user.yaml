@@ -4,9 +4,9 @@ reference_width: 1368
 reference_height: 800
 fps: 60
 keyboard_mode: sendinput
-confidence: 0.5
-model_path: E:/pythonProjects/mxd-automation/dist/best.pt
-monster_classes: 僵尸猴子,大幽灵,小幽灵,灰鳄鱼,猴子,石面人,蓝水灵,青蛇,鳄鱼
+confidence: 0.42
+model_path: train/model/best.pt
+monster_classes: monster
 floor_classes:
 rope_classes:
 self_name: 我是立立

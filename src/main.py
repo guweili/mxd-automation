@@ -605,13 +605,13 @@ class Automation:
             self._last_pickup_time = now
 
     def _monster_classes(self):
-        return [c.strip() for c in self.config.monster_classes.split(",") if c.strip()]
+        return [c.strip() for c in (self.config.monster_classes or "").split(",") if c.strip()]
 
     def _floor_classes(self):
-        return [c.strip() for c in self.config.floor_classes.split(",") if c.strip()]
+        return [c.strip() for c in (self.config.floor_classes or "").split(",") if c.strip()]
 
     def _rope_classes(self):
-        return [c.strip() for c in self.config.rope_classes.split(",") if c.strip()]
+        return [c.strip() for c in (self.config.rope_classes or "").split(",") if c.strip()]
 
     # =========================================================================
     # 自身定位
