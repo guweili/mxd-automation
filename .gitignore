@@ -11,5 +11,5 @@ _tmp_wheel/
 *.spec
 _*.txt
 _*.bat
-/train/data
 /dist/best.pt
+/train/

@@ -231,8 +231,12 @@ python main.py
 ### YOLO 模型
 
 - 必须提供有效的 YOLO `.pt` 模型文件，并在配置中指定 `model_path`（可在 UI 中设置）。
+- 模型文件统一存放在 `train/model/` 目录下：
+  - `yolov8n.pt` — 官方预训练基础模型（训练时作为初始化权重）
+  - `best.pt` — 训练后的最优模型（推理时使用）
 - 模型文件不存在时，程序会自动回退到 **MockDetector**（模拟检测器），仅用于测试框架逻辑，不会真正检测怪物。
-- 模型需要支持 3 个类别：`monster`（怪物）、`floor`（地板）、`rope`（绳索）。
+- 模型目前支持 **1 个类别**：`monster`（怪物）。所有怪物（僵尸猴子、大幽灵、小幽灵、灰鳄鱼、猴子、石面人、蓝水灵、青蛇、鳄鱼等）统一标注为 `monster`，不区分类别。
+- `floor_classes` 和 `rope_classes` 留空即可（当前未训练地板和绳索）。
 - 训练方法详见 [train/README.md](train/README.md)。
 
 ### 按键模式
@@ -280,11 +284,17 @@ python -m src.main
 
 ### 数据标注
 
-1. 将截图放入 `train/data/raw/` 目录
+1. 将截图放入 `train/data/raw_怪物名/` 目录（每个文件夹代表一种怪物）
 2. 使用 LabelImg 等工具标注，保存为 Pascal VOC XML 格式
 3. 标注的 XML 文件与图片同名，放在同一目录下
 
-类别定义（共 3 类）：`floor`（地板）、`monster`（怪物）、`rope`（绳索）
+类别定义：**所有怪物统一标注为 1 个类别** `monster`（不区分具体怪物种类）。训练脚本会自动把各文件夹中的标注全部映射为 `monster` 类别。
+
+当前训练的怪物文件夹：
+- `raw_僵尸猴子`、`raw_大幽灵`、`raw_小幽灵`、`raw_灰鳄鱼`、`raw_猴子`
+- `raw_石面人`、`raw_蓝水灵`、`raw_青蛇`、`raw_鳄鱼`
+
+（`raw_蝙蝠` 暂未参与训练）
 
 ### 自动标注
 
@@ -300,7 +310,7 @@ python train/scripts/01_auto_annotate/main.py
 python train/scripts/02_train_yolo/main.py
 ```
 
-全量数据训练 YOLO 模型，输出 `best.pt`。
+全量数据训练 YOLO 模型（基于 `train/model/yolov8n.pt` 预训练权重微调），训练完成后最优模型保存到 `train/model/best.pt`。
 
 ## 项目结构
 
@@ -332,11 +342,13 @@ mxd-automation/
 │       └── logger.py            # 日志
 ├── train/
 │   ├── data/
-│   │   ├── raw/                 # 原始图片 + XML 标注
-│   │   └── data.yaml            # 数据集类别配置
+│   │   ├── raw_怪物名/         # 原始图片 + XML 标注（每个文件夹一种怪物）
+│   │   └── data.yaml           # 数据集类别配置
 │   ├── scripts/
-│   │   ├── 01_auto_annotate/    # 自动标注脚本
-│   │   └── 02_train_yolo/       # 正式训练脚本
-│   └── model/                   # 预训练模型
-└── ui/                      # PyQt5 GUI 界面
+│   │   ├── 01_auto_annotate/   # 自动标注脚本
+│   │   └── 02_train_yolo/      # 正式训练脚本
+│   └── model/                  # 模型文件
+│       ├── yolov8n.pt          # 官方预训练基础模型
+│       └── best.pt             # 训练后的最优模型
+└── ui/                         # PyQt5 GUI 界面
 ```
