@@ -12,3 +12,4 @@ _tmp_wheel/
 _*.txt
 _*.bat
 /train/data
+/dist/best.pt

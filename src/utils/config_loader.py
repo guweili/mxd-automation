@@ -107,10 +107,11 @@ BUNDLE_DIR = _bundle_dir()
 PROJECT_ROOT = BUNDLE_DIR
 APP_DIR = _app_dir()
 
-# 配置文件：优先 exe 旁边（外置、可持久化），打包内仅作为兜底默认值
+# 配置文件：优先 exe 旁边根目录（外置、可持久化），打包内仅作为兜底默认值
+# 用户配置直接放在 exe 同级目录: <exe_dir>/user.yaml
 CONFIG_DIR = os.path.join(APP_DIR, "config")
-DEFAULT_YAML_PATH = os.path.join(CONFIG_DIR, "user.yaml")
-DEFAULT_JSON_PATH = os.path.join(CONFIG_DIR, "user.json")
+DEFAULT_YAML_PATH = os.path.join(APP_DIR, "user.yaml")
+DEFAULT_JSON_PATH = os.path.join(APP_DIR, "user.json")
 
 
 def resolve_model_path(raw_path: str) -> str:
@@ -140,24 +141,28 @@ TEMPLATE_FILENAME = "player_template.png"
 def resolve_template_path() -> str:
     """返回角色外观模板的绝对路径。
 
-    始终指向 APP_DIR/assets/templates/player_template.png（exe 旁边，开发环境 = 项目根目录）。
+    始终指向 APP_DIR/player_template.png（exe 旁边，开发环境 = 项目根目录）。
     该文件由界面"上传角色全身照"写入；开发环境也可能直接手动放置同名文件。
     与 resolve_model_path 不同：模板只存一份用户数据，不回退 BUNDLE_DIR。
     """
-    return os.path.join(APP_DIR, "assets", "templates", TEMPLATE_FILENAME)
+    return os.path.join(APP_DIR, TEMPLATE_FILENAME)
 
 
 def config_path() -> str:
     """返回当前生效的配置文件路径。
 
     优先级:
-      1. APP_DIR/config/user.yaml    （exe 旁边，用户配置）
-      2. APP_DIR/config/user.json
-      3. BUNDLE_DIR/config/user.yaml （打包内默认配置）
-      4. BUNDLE_DIR/config/user.json
-    都不存在时返回 APP_DIR/config/user.yaml（首次启动后保存到这里）。
+      1. APP_DIR/user.yaml              （exe 旁边，用户配置）
+      2. APP_DIR/user.json
+      3. APP_DIR/config/user.yaml       （向后兼容旧目录结构）
+      4. APP_DIR/config/user.json
+      5. BUNDLE_DIR/config/user.yaml    （打包内默认配置）
+      6. BUNDLE_DIR/config/user.json
+    都不存在时返回 APP_DIR/user.yaml（首次启动后保存到这里）。
     """
     for p in (
+        os.path.join(APP_DIR, "user.yaml"),
+        os.path.join(APP_DIR, "user.json"),
         os.path.join(APP_DIR, "config", "user.yaml"),
         os.path.join(APP_DIR, "config", "user.json"),
         os.path.join(BUNDLE_DIR, "config", "user.yaml"),
@@ -165,7 +170,7 @@ def config_path() -> str:
     ):
         if os.path.isfile(p):
             return p
-    return os.path.join(APP_DIR, "config", "user.yaml")
+    return os.path.join(APP_DIR, "user.yaml")
 
 
 def _load_yaml(path: str) -> Dict[str, Any]:
