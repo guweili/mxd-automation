@@ -39,7 +39,6 @@ MONSTER_DIRS = [
     "raw_猴子",
     "raw_石面人",
     "raw_蓝水灵",
-    "raw_蝙蝠",
     "raw_青蛇",
     "raw_鳄鱼",
 ]
