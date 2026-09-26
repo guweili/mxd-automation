@@ -51,7 +51,7 @@
      原理: 用户截取角色全身图作为模板 → cv2.matchTemplate 多尺度匹配 →
            一旦锁定，下一帧只在附近局部搜索（加速）。
      条件: 模板已上传（exe 界面"上传角色全身照"，保存位置由 resolve_template_path()
-           统一解析，即 exe 旁边 / 项目根目录的 assets/templates/）；换时装/换地图需重新上传。
+           统一解析，即 exe 旁边 / 项目根目录的 player_template.png）；换时装/换地图需重新上传。
      优点: 不依赖名字 OCR，角色下半身被地图挡住也能定位。
      缺点: 依赖外观特征，时装/姿势变化大时可能匹配不上。
 
@@ -267,7 +267,7 @@ class Automation:
 
     def _create_player_tracker(self, template_path: str) -> PlayerTracker:
         """创建外观模板跟踪器（统一参数，避免多处重复）。"""
-        # 截图定位置信度从配置读取（config/user.yaml 的 template_confidence），
+        # 截图定位置信度从配置读取（user.yaml 的 template_confidence），
         # 局部搜索和全图搜索共用同一个阈值，避免两套阈值导致全图搜索被
         # 卡死。默认 0.55：真实角色因缩放/朝向/光照/部分遮挡，匹配分数
         # 常在 0.55 上下，配合 exclude_bottom 排除底部 UI 头像，够用且
@@ -755,7 +755,7 @@ def main():
 
     cfg = load_config()
     if not cfg.window_title:
-        log.error("未配置 window_title，请在 config/user.yaml 中设置")
+        log.error("未配置 window_title，请在 user.yaml 中设置")
         return
 
     auto = Automation(cfg, on_log=lambda m: log.info(m))

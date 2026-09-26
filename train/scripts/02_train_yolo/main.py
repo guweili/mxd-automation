@@ -45,10 +45,10 @@ MONSTER_DIRS = [
 
 
 # 目录名 → 类别 ID（跳过无标注的目录）
+# 所有怪物统一使用同一个类别 "monster"（多类别转单类别）
 def build_class_mapping():
-    cls_id = 0
     mapping = {}
-    classes = {}
+    classes = {0: "monster"}
     for dirname in MONSTER_DIRS:
         folder = Path(DATA_ROOT) / dirname
         if not folder.exists():
@@ -57,10 +57,7 @@ def build_class_mapping():
         if not xml_files:
             print(f"[跳过] {dirname} 无标注文件")
             continue
-        monster_name = dirname.replace("raw_", "")
-        mapping[dirname] = cls_id
-        classes[cls_id] = monster_name
-        cls_id += 1
+        mapping[dirname] = 0
     return mapping, classes
 
 

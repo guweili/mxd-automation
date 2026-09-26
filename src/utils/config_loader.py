@@ -6,21 +6,20 @@
 
   配置分为两层:
     - 默认配置: 内置在代码中，提供合理的出厂默认值
-    - 用户配置: 保存在 config/user.yaml (或 user.json)，覆盖默认值
+    - 用户配置: 保存在 exe 同级目录的 user.yaml，覆盖默认值
 
   双层覆盖机制:
     1. 先加载默认配置（_defaults()）
-    2. 再读取 user.yaml / user.json，用用户配置覆盖同名字段
+    2. 再读取 user.yaml，用用户配置覆盖同名字段
     3. 最终 Config 对象包含合并后的值
 
   这样用户只需要配置自己关心的字段，其余使用默认值即可。
 
 ================================================================================
-YAML / JSON 双格式支持
+YAML 配置
 ================================================================================
 
-  优先读取 config/user.yaml（推荐格式，支持中文注释）。
-  若 user.yaml 不存在，回退读取 config/user.json（向后兼容）。
+  读取 exe 同级目录（开发环境 = 项目根目录）的 user.yaml。
   保存时统一写入 user.yaml。
 
 ================================================================================
@@ -149,27 +148,10 @@ def resolve_template_path() -> str:
 
 
 def config_path() -> str:
-    """返回当前生效的配置文件路径。
+    """返回用户配置文件路径。
 
-    优先级:
-      1. APP_DIR/user.yaml              （exe 旁边，用户配置）
-      2. APP_DIR/user.json
-      3. APP_DIR/config/user.yaml       （向后兼容旧目录结构）
-      4. APP_DIR/config/user.json
-      5. BUNDLE_DIR/config/user.yaml    （打包内默认配置）
-      6. BUNDLE_DIR/config/user.json
-    都不存在时返回 APP_DIR/user.yaml（首次启动后保存到这里）。
+    直接读取 exe 同级目录（开发环境 = 项目根目录）的 user.yaml。
     """
-    for p in (
-        os.path.join(APP_DIR, "user.yaml"),
-        os.path.join(APP_DIR, "user.json"),
-        os.path.join(APP_DIR, "config", "user.yaml"),
-        os.path.join(APP_DIR, "config", "user.json"),
-        os.path.join(BUNDLE_DIR, "config", "user.yaml"),
-        os.path.join(BUNDLE_DIR, "config", "user.json"),
-    ):
-        if os.path.isfile(p):
-            return p
     return os.path.join(APP_DIR, "user.yaml")
 
 
@@ -202,11 +184,8 @@ def _load_json(path: str) -> Dict[str, Any]:
 
 
 def _load_user_config() -> Dict[str, Any]:
-    """加载用户配置：优先 exe 旁边（外置）user.yaml，回退打包内默认。"""
-    data = _load_yaml(config_path())
-    if not data:
-        data = _load_json(config_path())
-    return data
+    """加载用户配置：读取 exe 同级目录的 user.yaml。"""
+    return _load_yaml(config_path())
 
 
 def _defaults() -> Dict[str, Any]:
@@ -286,7 +265,7 @@ class Config:
     封装双层配置（默认 + 用户），提供属性访问和坐标缩放功能。
 
     用法:
-        cfg = Config.load()  # 从 config/user.yaml 加载
+        cfg = Config.load()  # 从 exe 同级目录的 user.yaml 加载
         cfg = Config(overrides={"hp_region": [100, 200, 50, 10]})  # 覆盖某项
 
     Attributes:
@@ -347,7 +326,7 @@ class Config:
         """保存当前配置到 YAML 文件。
 
         Args:
-            path: 保存路径，None 时使用默认路径 config/user.yaml
+            path: 保存路径，None 时使用默认路径 user.yaml（exe 同级目录）
         """
         if path is None:
             path = DEFAULT_YAML_PATH
@@ -496,7 +475,7 @@ def save_config(config: Config, path: str):
 
 
 def save_user_config(config: Config):
-    """保存配置到默认用户配置文件 (config/user.yaml)。
+    """保存配置到默认用户配置文件 (exe 同级目录 user.yaml)。
 
     Args:
         config: Config 实例

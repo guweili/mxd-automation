@@ -5,10 +5,10 @@ reference_height: 800
 fps: 60
 keyboard_mode: sendinput
 confidence: 0.5
-model_path: E:/pythonProjects/mxd-automation/dist/best.onnx
-monster_classes: monster
-floor_classes: floor
-rope_classes: rope
+model_path: E:/pythonProjects/mxd-automation/dist/best.pt
+monster_classes: 僵尸猴子,大幽灵,小幽灵,灰鳄鱼,猴子,石面人,蓝水灵,青蛇,鳄鱼
+floor_classes:
+rope_classes:
 self_name: 我是立立
 self_offset: 85
 template_confidence: 0.55
