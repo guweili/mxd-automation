@@ -5,10 +5,10 @@ __pycache__/
 .idea/
 .vscode/
 *.log
-train/data/raw/
 train/scripts/02_train_yolo/runs/
 train/scripts/02_train_yolo/model/
 _tmp_wheel/
 *.spec
 _*.txt
 _*.bat
+/train/data

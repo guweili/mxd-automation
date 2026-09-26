@@ -37,9 +37,8 @@ NAME_TO_ID = {v: k for k, v in CLASSES.items()}
 # 调低 → 更多框（可能误检），调高 → 更精准（可能漏检）
 CONFIDENCE_THRESHOLD = 0.3
 
-# 推理数量限制：只对前 N 张未标注图片进行推理，None = 全部
-# 先设 10 张看看效果，满意后再改大或设为 None
-MAX_PREDICT = 1000
+# 推理数量限制：只对最后 N 张未标注图片进行推理，None = 全部
+MAX_PREDICT = None
 
 # 训练轮数：数据少时适当增大，数据多时减小
 # 26 张数据建议 50-100 轮
@@ -52,7 +51,7 @@ SKIP_TRAIN = False
 
 # 训练设备：0 = 第一块 CUDA GPU，"cpu" = 仅用 CPU
 # ultralytics 会自动检测 CUDA，这里显式指定确保使用 GPU
-DEVICE = "cpu"
+DEVICE = "0"
 
 # ============================================================
 
@@ -240,8 +239,8 @@ def predict_and_save_xml(model_path: str, raw_dir: str, annotated_stems: Set[str
 
     total = len(unannotated)
     if max_predict is not None and max_predict > 0:
-        unannotated = unannotated[:max_predict]
-        print(f"[推理] 待标注图片: {total} 张，本次推理前 {len(unannotated)} 张")
+        unannotated = unannotated[-max_predict:]
+        print(f"[推理] 待标注图片: {total} 张，本次推理最后 {len(unannotated)} 张")
     else:
         print(f"[推理] 待标注图片: {len(unannotated)} 张")
 
